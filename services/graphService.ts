@@ -1,5 +1,5 @@
 
-import { AppConfig, User, SystemConfig } from '../types';
+import { AppConfig, User, SystemConfig, PhotoRecord, UploadStatus } from '../types';
 import { INITIAL_USERS } from './mockAuth';
 
 // Cấu hình mặc định
@@ -15,6 +15,16 @@ export const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
 const getFreshAccessToken = async (): Promise<string> => {
   try {
     const response = await fetch('/api/token');
+    
+    // Kiểm tra Content-Type trước khi parse JSON
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      // Nếu không phải JSON (ví dụ: HTML lỗi 404/500 hoặc text), ném lỗi rõ ràng
+      const text = await response.text();
+      // Lấy 100 ký tự đầu để debug
+      throw new Error(`Invalid API Response (Not JSON). Status: ${response.status}. Content: ${text.substring(0, 100)}...`);
+    }
+
     const data = await response.json();
     
     if (!response.ok || !data.accessToken) {
@@ -147,6 +157,75 @@ export const saveSystemConfig = async (sysConfig: SystemConfig, config: AppConfi
 };
 
 /**
+ * SYSTEM LOGO: Upload logo và trả về Direct Link
+ */
+export const uploadSystemLogo = async (file: File, config: AppConfig): Promise<string> => {
+  if (config.simulateMode) return URL.createObjectURL(file);
+
+  try {
+    const token = await getFreshAccessToken();
+    // Đặt tên file duy nhất để tránh cache
+    const fileName = `Logo_${Date.now()}_${file.name.replace(/\s/g, '_')}`;
+    const fullPath = `${config.targetFolder}/System/${fileName}`;
+
+    // 1. Upload File
+    const uploadEndpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${fullPath}:/content`;
+    const uploadRes = await fetch(uploadEndpoint, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': file.type,
+      },
+      body: file,
+    });
+
+    if (!uploadRes.ok) throw new Error("Lỗi upload logo lên server");
+
+    // 2. Tạo Share Link (Anonymous)
+    // Cần tạo link để có thể view mà không cần login (dùng làm src cho thẻ img)
+    const createLinkEndpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${fullPath}:/createLink`;
+    const linkBody = { type: 'view', scope: 'anonymous' };
+    
+    let shareLinkUrl = '';
+    
+    const linkRes = await fetch(createLinkEndpoint, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(linkBody)
+    });
+
+    if (linkRes.ok) {
+        const linkData = await linkRes.json();
+        shareLinkUrl = linkData.link.webUrl;
+    } else {
+        // Fallback: Nếu không cho tạo anonymous, thử organization
+        const retryRes = await fetch(createLinkEndpoint, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'view', scope: 'organization' })
+        });
+        if(retryRes.ok) {
+            const retryData = await retryRes.json();
+            shareLinkUrl = retryData.link.webUrl;
+        } else {
+            throw new Error("Không thể tạo link chia sẻ cho Logo");
+        }
+    }
+
+    // 3. Biến đổi Share Link thành Direct Download Link để hiển thị được trong thẻ <img>
+    // Trick: Thêm ?download=1 vào cuối link OneDrive chia sẻ thường sẽ force tải về/hiển thị raw
+    // OneDrive share link thường dạng: https://.../onedrive.aspx?...
+    // Ta nối thêm &download=1 hoặc ?download=1
+    const separator = shareLinkUrl.includes('?') ? '&' : '?';
+    return `${shareLinkUrl}${separator}download=1`;
+
+  } catch (error) {
+    console.error("Upload Logo Error:", error);
+    throw error;
+  }
+};
+
+/**
  * Hàm upload file lên OneDrive dùng Microsoft Graph API
  */
 export const uploadToOneDrive = async (
@@ -201,6 +280,53 @@ export const uploadToOneDrive = async (
   } catch (error: any) {
     console.error("OneDrive Upload Error:", error);
     return { success: false, error: error.message };
+  }
+};
+
+/**
+ * HISTORY: Lấy danh sách file đã upload trong tháng hiện tại để hiện thị ở Lịch sử/Hoạt động gần đây
+ */
+export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
+  if (config.simulateMode) return [];
+
+  try {
+    const token = await getFreshAccessToken();
+    const now = new Date();
+    const currentMonth = (now.getMonth() + 1).toString().padStart(2, '0');
+    const monthFolder = `T${currentMonth}`;
+    const unitFolder = user.unit || 'Unknown_Unit';
+    
+    // Path: SnapSync302/Unit/Username/Txx
+    const path = `${config.targetFolder}/${unitFolder}/${user.username}/${monthFolder}`;
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children?select=id,name,webUrl,createdDateTime,size,file`;
+
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+
+    if (response.status === 404) return []; // Chưa có thư mục tháng này
+    if (!response.ok) throw new Error("Lỗi tải lịch sử file");
+
+    const data = await response.json();
+    
+    // Map OneDrive item sang PhotoRecord
+    const records: PhotoRecord[] = data.value.map((item: any) => ({
+      id: item.id,
+      fileName: item.name,
+      status: UploadStatus.SUCCESS,
+      uploadedUrl: item.webUrl,
+      timestamp: new Date(item.createdDateTime),
+      size: item.size,
+      previewUrl: '' // Remote file không có preview blob, UI sẽ hiển thị icon
+    }));
+
+    // Sắp xếp mới nhất lên đầu
+    return records.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+  } catch (error) {
+    console.error("Fetch Recent Files Error:", error);
+    return [];
   }
 };
 

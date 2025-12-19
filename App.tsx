@@ -5,7 +5,8 @@ import { INITIAL_USERS, login } from './services/mockAuth';
 import { 
   uploadToOneDrive, fetchUsersFromOneDrive, saveUsersToOneDrive, 
   listUserMonthFolders, listFilesInMonthFolder, createShareLink,
-  fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG
+  fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles,
+  uploadSystemLogo
 } from './services/graphService';
 import { Button } from './components/Button';
 import { 
@@ -13,10 +14,10 @@ import {
   Loader2, Image as ImageIcon, Users, Trash2, Plus, Edit,
   FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, Download,
-  AlertTriangle, Shield, Palette, Save, UserPlus, Check
+  AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.3";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.5";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
@@ -67,6 +68,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<'camera' | 'history' | 'share' | 'settings'>('camera');
   const [photos, setPhotos] = useState<PhotoRecord[]>([]);
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   
   // User Management State
   const [isEditingUser, setIsEditingUser] = useState(false);
@@ -76,6 +78,8 @@ export default function App() {
   // System Config State (For Admin Edit)
   const [tempSysConfig, setTempSysConfig] = useState<SystemConfig>(DEFAULT_SYSTEM_CONFIG);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [selectedLogoFile, setSelectedLogoFile] = useState<File | null>(null);
+  const [previewLogoUrl, setPreviewLogoUrl] = useState<string>('');
 
   // Share View State
   const [shareFolders, setShareFolders] = useState<any[]>([]);
@@ -87,6 +91,7 @@ export default function App() {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const multiFileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   // --- EFFECTS ---
   useEffect(() => {
@@ -99,6 +104,7 @@ export default function App() {
         setUsersList(cloudUsers);
         setSystemConfig(cloudConfig);
         setTempSysConfig(cloudConfig);
+        setPreviewLogoUrl(cloudConfig.logoUrl);
       } catch (e) {
         console.error("Lỗi khởi tạo data:", e);
       } finally {
@@ -115,13 +121,23 @@ export default function App() {
   }, [currentView, user]);
 
   // --- HANDLERS ---
+  const loadRecentPhotos = async (currentUser: User) => {
+    setIsHistoryLoading(true);
+    try {
+      const records = await fetchUserRecentFiles(config, currentUser);
+      setPhotos(records);
+    } catch (e) {
+      console.error("Failed to load recent files", e);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setLoginError('');
     
-    // Nếu data chưa load xong, thử load lại
     let currentList = usersList;
     if (!isDataLoaded) {
        try {
@@ -136,13 +152,14 @@ export default function App() {
     try {
       const loggedUser = await login(username, password, currentList);
       if (loggedUser) {
-        // Kiểm tra trạng thái duyệt
         if (loggedUser.status === 'pending') {
           setLoginError('Tài khoản đang chờ phê duyệt!');
         } else {
           setUser(loggedUser);
           setCurrentView('camera');
-          setShowDisclaimer(true); // Hiển thị popup sau khi login thành công
+          setShowDisclaimer(true);
+          // Tải lại lịch sử file ngay khi login
+          loadRecentPhotos(loggedUser);
         }
       } else {
         setLoginError('Tài khoản hoặc mật khẩu không đúng.');
@@ -210,6 +227,7 @@ export default function App() {
     setCurrentView('camera');
     setShareFolders([]);
     setShareFiles([]);
+    setPhotos([]); // Clear local photos
     setCurrentShareFolder(null);
     setShowDisclaimer(false);
   };
@@ -227,13 +245,38 @@ export default function App() {
     }
   };
 
+  const handleLogoSelection = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setSelectedLogoFile(file);
+      setPreviewLogoUrl(URL.createObjectURL(file));
+    }
+  };
+
   const handleSaveSystemConfig = async () => {
     if (!confirm("Bạn có chắc chắn muốn thay đổi giao diện cho TOÀN BỘ hệ thống không?")) return;
     setIsSavingConfig(true);
     try {
-      const success = await saveSystemConfig(tempSysConfig, config);
+      let finalConfig = { ...tempSysConfig };
+      
+      // Nếu có chọn file logo mới thì upload trước
+      if (selectedLogoFile) {
+         try {
+           const newLogoUrl = await uploadSystemLogo(selectedLogoFile, config);
+           finalConfig.logoUrl = newLogoUrl;
+         } catch (uploadErr) {
+           console.error("Failed to upload logo:", uploadErr);
+           alert("Lỗi upload logo: " + (uploadErr as any).message);
+           setIsSavingConfig(false);
+           return;
+         }
+      }
+
+      const success = await saveSystemConfig(finalConfig, config);
       if (success) {
-        setSystemConfig(tempSysConfig);
+        setSystemConfig(finalConfig);
+        setTempSysConfig(finalConfig);
+        setSelectedLogoFile(null); // Reset file selection
         alert("Đã lưu cấu hình thành công!");
       } else {
         alert("Lỗi lưu cấu hình.");
@@ -265,7 +308,7 @@ export default function App() {
     }
   };
 
-  // ... (Giữ nguyên các hàm handleFileSelection, loadShareFolders, openShareFolder, handleCreateLink, getFileIcon, getPreview)
+  // ... Helper Functions ...
   const handleFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
@@ -274,6 +317,7 @@ export default function App() {
     const newRecords: PhotoRecord[] = fileArray.map(file => ({
       id: Date.now().toString() + Math.random().toString(),
       file,
+      fileName: file.name,
       previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : '',
       status: UploadStatus.UPLOADING,
       timestamp: new Date(),
@@ -282,6 +326,7 @@ export default function App() {
     setPhotos(prev => [...newRecords, ...prev]);
 
     for (const record of newRecords) {
+      if (!record.file) continue;
       try {
         const result = await uploadToOneDrive(record.file, config, user);
         setPhotos(prev => prev.map(p => {
@@ -354,18 +399,24 @@ export default function App() {
     }
   };
 
-  const getFileIcon = (file: File | { name: string, file?: any }) => {
-    const name = 'name' in file ? file.name : (file as File).name;
-    const type = 'type' in file ? (file as File).type : '';
-    if (type.startsWith('image/') || name.match(/\.(jpg|jpeg|png|gif|webp)$/i)) return <ImageIcon className="w-6 h-6 text-emerald-600" />;
-    if (type.startsWith('video/') || name.match(/\.(mp4|mov|avi|mkv)$/i)) return <Film className="w-6 h-6 text-blue-600" />;
-    if (name.match(/\.(zip|rar|7z)$/i)) return <FileArchive className="w-6 h-6 text-amber-600" />;
+  const getFileIcon = (fileName: string, mimeType?: string) => {
+    if (mimeType?.startsWith('image/') || fileName.match(/\.(jpg|jpeg|png|gif|webp)$/i)) return <ImageIcon className="w-6 h-6 text-emerald-600" />;
+    if (mimeType?.startsWith('video/') || fileName.match(/\.(mp4|mov|avi|mkv)$/i)) return <Film className="w-6 h-6 text-blue-600" />;
+    if (fileName.match(/\.(zip|rar|7z)$/i)) return <FileArchive className="w-6 h-6 text-amber-600" />;
     return <FileIcon className="w-6 h-6 text-slate-400" />;
   };
 
   const getPreview = (record: PhotoRecord) => {
-    if (record.previewUrl) return <img src={record.previewUrl} alt="Preview" className="w-16 h-16 object-cover rounded-lg bg-slate-100 border border-slate-200" />;
-    return <div className="w-16 h-16 flex items-center justify-center rounded-lg bg-slate-100 border border-slate-200">{getFileIcon(record.file)}</div>;
+    // Nếu có previewUrl (file vừa upload local) thì hiện ảnh
+    if (record.previewUrl) {
+        return <img src={record.previewUrl} alt="Preview" className="w-16 h-16 object-cover rounded-lg bg-slate-100 border border-slate-200" />;
+    }
+    // Nếu là file remote hoặc không phải ảnh, hiện icon
+    return (
+      <div className="w-16 h-16 flex items-center justify-center rounded-lg bg-slate-100 border border-slate-200">
+        {getFileIcon(record.fileName)}
+      </div>
+    );
   };
 
   // --- USER MANAGEMENT HANDLERS ---
@@ -421,18 +472,35 @@ export default function App() {
     setIsEditingUser(true);
   };
 
+  // --- FILTERS ---
+  // Lọc cho trang Upload (Camera): 7 ngày gần nhất
+  const getWeeklyPhotos = () => {
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    return photos.filter(p => p.timestamp >= oneWeekAgo);
+  };
+
+  // Lọc cho trang History: Toàn bộ (đã fetch theo tháng ở service)
+  const getHistoryPhotos = () => {
+    return photos;
+  };
+
   // --- RENDER ---
   const themeStyle = { backgroundColor: systemConfig.themeColor };
   const textThemeStyle = { color: systemConfig.themeColor };
   const buttonStyle = { backgroundColor: systemConfig.themeColor };
 
   if (!user) {
+    // ... Login UI (Giữ nguyên)
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col justify-center px-6">
         <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full mx-auto animate-in fade-in zoom-in duration-300">
           <div className="flex justify-center mb-6">
             <div className="w-24 h-24 rounded-full flex items-center justify-center border-4 border-white shadow-md overflow-hidden bg-white">
-              <img src={systemConfig.logoUrl} className="w-full h-full object-cover" alt="Logo" />
+              <img src={systemConfig.logoUrl} className="w-full h-full object-cover" alt="Logo" onError={(e) => {
+                // Fallback nếu ảnh lỗi
+                (e.target as HTMLImageElement).src = "https://cdn-icons-png.flaticon.com/512/6534/6534062.png";
+              }} />
             </div>
           </div>
           <h1 className="text-2xl font-bold text-center mb-1 uppercase tracking-tight" style={textThemeStyle}>{systemConfig.appName}</h1>
@@ -528,6 +596,15 @@ export default function App() {
         <input type="file" 
           // @ts-ignore
           webkitdirectory="" directory="" ref={folderInputRef} onChange={handleFileSelection} className="hidden" />
+          
+        {/* Input ẩn cho Logo Upload */}
+        <input 
+            type="file" 
+            accept="image/png, image/jpeg, image/gif" 
+            ref={logoInputRef} 
+            onChange={handleLogoSelection} 
+            className="hidden" 
+        />
 
         {currentView === 'camera' && (
           <div className="space-y-6">
@@ -563,26 +640,31 @@ export default function App() {
             <div className="flex justify-between items-center mt-8 mb-4 border-b border-slate-200 pb-2">
               <h3 className="font-bold text-slate-700 flex items-center">
                 <History className="w-4 h-4 mr-2 text-slate-400" />
-                Hoạt động gần đây
+                Hoạt động gần đây (Tuần)
               </h3>
               <button onClick={() => setCurrentView('history')} className="text-xs font-bold hover:underline" style={textThemeStyle}>Xem tất cả</button>
             </div>
-            {photos.length === 0 ? (
+            {isHistoryLoading ? (
+              <div className="text-center py-6 text-slate-400"><Loader2 className="w-6 h-6 mx-auto animate-spin mb-1" /> Đang đồng bộ...</div>
+            ) : getWeeklyPhotos().length === 0 ? (
               <div className="text-center py-12 text-slate-400 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
                 <ImageIcon className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                <p>Chưa có dữ liệu.</p>
+                <p>Chưa có dữ liệu trong tuần.</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {photos.slice(0, 3).map((photo) => (
+                {getWeeklyPhotos().slice(0, 5).map((photo) => (
                   <div key={photo.id} className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center">
                     {getPreview(photo)}
                     <div className="ml-4 flex-1 min-w-0">
-                      <p className="text-sm font-medium text-slate-800 truncate">{photo.file.name}</p>
-                      <div className="mt-1 flex items-center">
-                        {photo.status === UploadStatus.UPLOADING && <span className="text-xs text-blue-600 flex items-center font-medium"><Loader2 className="w-3 h-3 mr-1 animate-spin" /> Đang gửi...</span>}
-                        {photo.status === UploadStatus.SUCCESS && <span className="text-xs text-green-600 flex items-center font-medium"><CheckCircle className="w-3 h-3 mr-1" /> Đã gửi xong</span>}
-                        {photo.status === UploadStatus.ERROR && <span className="text-xs text-red-500 flex items-center font-medium"><XCircle className="w-3 h-3 mr-1" /> {photo.errorMessage}</span>}
+                      <p className="text-sm font-medium text-slate-800 truncate">{photo.fileName}</p>
+                      <div className="mt-1 flex items-center justify-between">
+                         <div className="flex items-center">
+                            {photo.status === UploadStatus.UPLOADING && <span className="text-xs text-blue-600 flex items-center font-medium"><Loader2 className="w-3 h-3 mr-1 animate-spin" /> Đang gửi...</span>}
+                            {photo.status === UploadStatus.SUCCESS && <span className="text-xs text-green-600 flex items-center font-medium"><CheckCircle className="w-3 h-3 mr-1" /> Đã gửi</span>}
+                            {photo.status === UploadStatus.ERROR && <span className="text-xs text-red-500 flex items-center font-medium"><XCircle className="w-3 h-3 mr-1" /> {photo.errorMessage}</span>}
+                         </div>
+                         <span className="text-[10px] text-slate-400">{photo.timestamp.toLocaleDateString('vi-VN')}</span>
                       </div>
                     </div>
                   </div>
@@ -594,26 +676,31 @@ export default function App() {
 
         {currentView === 'history' && (
           <div className="space-y-4">
-             <h3 className="font-bold text-slate-800 text-lg mb-4">Lịch sử gửi file</h3>
-             {photos.length === 0 && <p className="text-slate-500 text-center">Trống</p>}
-             {photos.map((photo) => (
-              <div key={photo.id} className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center">
-                 {getPreview(photo)}
-                 <div className="ml-3 flex-1 min-w-0">
-                   <p className="text-sm font-medium text-slate-800 truncate">{photo.file.name}</p>
-                   <div className="flex justify-between items-center mt-1">
-                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                        photo.status === UploadStatus.SUCCESS ? 'bg-green-100 text-green-700' :
-                        photo.status === UploadStatus.UPLOADING ? 'bg-blue-100 text-blue-700' :
-                        'bg-red-100 text-red-700'
-                     }`}>
-                       {photo.status === UploadStatus.SUCCESS ? 'THÀNH CÔNG' : photo.status === UploadStatus.UPLOADING ? 'ĐANG GỬI' : 'LỖI'}
-                     </span>
-                     <span className="text-xs text-slate-400">{photo.timestamp.toLocaleTimeString()}</span>
-                   </div>
-                 </div>
-              </div>
-            ))}
+             <h3 className="font-bold text-slate-800 text-lg mb-4">Lịch sử gửi file (Tháng này)</h3>
+             {isHistoryLoading ? (
+                 <div className="text-center py-12 text-slate-400"><Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" /> Đang tải lịch sử...</div>
+             ) : getHistoryPhotos().length === 0 ? (
+                 <p className="text-slate-500 text-center">Trống</p>
+             ) : (
+                 getHistoryPhotos().map((photo) => (
+                  <div key={photo.id} className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center">
+                     {getPreview(photo)}
+                     <div className="ml-3 flex-1 min-w-0">
+                       <p className="text-sm font-medium text-slate-800 truncate">{photo.fileName}</p>
+                       <div className="flex justify-between items-center mt-1">
+                         <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                            photo.status === UploadStatus.SUCCESS ? 'bg-green-100 text-green-700' :
+                            photo.status === UploadStatus.UPLOADING ? 'bg-blue-100 text-blue-700' :
+                            'bg-red-100 text-red-700'
+                         }`}>
+                           {photo.status === UploadStatus.SUCCESS ? 'THÀNH CÔNG' : photo.status === UploadStatus.UPLOADING ? 'ĐANG GỬI' : 'LỖI'}
+                         </span>
+                         <span className="text-xs text-slate-400">{photo.timestamp.toLocaleDateString('vi-VN')} {photo.timestamp.toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'})}</span>
+                       </div>
+                     </div>
+                  </div>
+                ))
+             )}
           </div>
         )}
 
@@ -664,7 +751,7 @@ export default function App() {
                   shareFiles.map(file => (
                     <div key={file.id} className="bg-white p-3 rounded-lg border border-slate-100 flex items-center justify-between">
                        <div className="flex items-center min-w-0 flex-1">
-                         {getFileIcon(file)}
+                         {getFileIcon(file.name, file.file?.mimeType)}
                          <div className="ml-3 min-w-0">
                            <p className="text-sm font-medium text-slate-700 truncate">{file.name}</p>
                            <p className="text-[10px] text-slate-400">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
@@ -737,14 +824,23 @@ export default function App() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Logo URL (Ảnh vuông)</label>
-                  <div className="flex gap-2">
-                    <img src={tempSysConfig.logoUrl} className="w-10 h-10 rounded-lg border object-cover bg-slate-50" />
-                    <input 
-                      className="w-full text-sm p-2 border rounded focus:ring-2 outline-none" 
-                      value={tempSysConfig.logoUrl}
-                      onChange={e => setTempSysConfig({...tempSysConfig, logoUrl: e.target.value})}
-                    />
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Logo Ứng dụng</label>
+                  <div className="flex gap-4 items-center">
+                    <div className="w-16 h-16 rounded-lg border bg-slate-50 overflow-hidden flex-shrink-0">
+                      <img src={previewLogoUrl || "https://cdn-icons-png.flaticon.com/512/6534/6534062.png"} className="w-full h-full object-cover" alt="Preview" onError={(e) => { (e.target as HTMLImageElement).src = "https://cdn-icons-png.flaticon.com/512/6534/6534062.png"; }} />
+                    </div>
+                    <div className="flex-1">
+                      <button 
+                        onClick={() => logoInputRef.current?.click()}
+                        className="w-full bg-slate-100 text-slate-700 py-2 rounded-lg text-xs font-bold border border-slate-200 hover:bg-slate-200 flex items-center justify-center"
+                      >
+                         <UploadCloud className="w-4 h-4 mr-2" />
+                         {selectedLogoFile ? "Đổi file khác" : "Chọn file ảnh mới"}
+                      </button>
+                      <p className="text-[10px] text-slate-400 mt-1 text-center">
+                        {selectedLogoFile ? `Đã chọn: ${selectedLogoFile.name}` : "Hỗ trợ: PNG, JPG, GIF"}
+                      </p>
+                    </div>
                   </div>
                 </div>
                 <div>

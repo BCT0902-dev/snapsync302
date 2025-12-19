@@ -18,12 +18,14 @@ export enum UploadStatus {
 
 export interface PhotoRecord {
   id: string;
-  file: File;
-  previewUrl: string;
+  file?: File; // Optional vì file load từ cloud sẽ không có blob local
+  fileName: string; // Tên file
+  previewUrl?: string;
   status: UploadStatus;
-  uploadedUrl?: string;
+  uploadedUrl?: string; // WebUrl từ OneDrive
   timestamp: Date;
   errorMessage?: string;
+  size?: number;
 }
 
 export interface AppConfig {
