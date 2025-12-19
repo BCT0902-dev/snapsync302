@@ -15,6 +15,14 @@ export const INITIAL_USERS: User[] = [
     displayName: 'Quản Trị Hệ Thống', 
     unit: 'Bo_chi_huy' 
   },
+  { 
+    id: 'admin_backup', 
+    username: 'admin2', 
+    password: ADMIN_SECRET, 
+    role: 'admin', 
+    displayName: 'Admin Dự Phòng', 
+    unit: 'Bo_chi_huy' 
+  },
 ];
 
 // Hàm login (Validation local)

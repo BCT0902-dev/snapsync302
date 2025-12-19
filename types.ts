@@ -30,3 +30,9 @@ export interface AppConfig {
   targetFolder: string;
   simulateMode: boolean;
 }
+
+export interface SystemConfig {
+  appName: string;
+  logoUrl: string;
+  themeColor: string; // Hex code
+}

@@ -1,20 +1,22 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { User, PhotoRecord, UploadStatus, AppConfig } from './types';
+import { User, PhotoRecord, UploadStatus, AppConfig, SystemConfig } from './types';
 import { INITIAL_USERS, login } from './services/mockAuth';
 import { 
   uploadToOneDrive, fetchUsersFromOneDrive, saveUsersToOneDrive, 
-  listUserMonthFolders, listFilesInMonthFolder, createShareLink 
+  listUserMonthFolders, listFilesInMonthFolder, createShareLink,
+  fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG
 } from './services/graphService';
 import { Button } from './components/Button';
 import { 
   Camera, LogOut, Info, Settings, History, CheckCircle, XCircle, 
   Loader2, Image as ImageIcon, Users, Trash2, Plus, Edit,
   FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
-  Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, Download
+  Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, Download,
+  AlertTriangle, Shield, Palette, Save
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.1";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.2";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
@@ -46,13 +48,15 @@ const UNIT_SUGGESTIONS = [
 export default function App() {
   // --- STATE ---
   const [usersList, setUsersList] = useState<User[]>(INITIAL_USERS);
-  const [isUsersLoaded, setIsUsersLoaded] = useState(false);
+  const [systemConfig, setSystemConfig] = useState<SystemConfig>(DEFAULT_SYSTEM_CONFIG);
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
 
   const [user, setUser] = useState<User | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [showDisclaimer, setShowDisclaimer] = useState(false); // Popup state
   
   // Views: camera, history, share, settings
   const [currentView, setCurrentView] = useState<'camera' | 'history' | 'share' | 'settings'>('camera');
@@ -63,13 +67,17 @@ export default function App() {
   const [isEditingUser, setIsEditingUser] = useState(false);
   const [editingUser, setEditingUser] = useState<Partial<User>>({});
   const [isSavingUser, setIsSavingUser] = useState(false);
+  
+  // System Config State (For Admin Edit)
+  const [tempSysConfig, setTempSysConfig] = useState<SystemConfig>(DEFAULT_SYSTEM_CONFIG);
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
 
   // Share View State
   const [shareFolders, setShareFolders] = useState<any[]>([]);
   const [currentShareFolder, setCurrentShareFolder] = useState<string | null>(null);
   const [shareFiles, setShareFiles] = useState<any[]>([]);
   const [isLoadingShare, setIsLoadingShare] = useState(false);
-  const [sharingItem, setSharingItem] = useState<string | null>(null); // ID item đang tạo link
+  const [sharingItem, setSharingItem] = useState<string | null>(null); 
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const multiFileInputRef = useRef<HTMLInputElement>(null);
@@ -79,18 +87,22 @@ export default function App() {
   useEffect(() => {
     const initData = async () => {
       try {
-        const cloudUsers = await fetchUsersFromOneDrive(config);
+        const [cloudUsers, cloudConfig] = await Promise.all([
+          fetchUsersFromOneDrive(config),
+          fetchSystemConfig(config)
+        ]);
         setUsersList(cloudUsers);
+        setSystemConfig(cloudConfig);
+        setTempSysConfig(cloudConfig);
       } catch (e) {
         console.error("Lỗi khởi tạo data:", e);
       } finally {
-        setIsUsersLoaded(true);
+        setIsDataLoaded(true);
       }
     };
     initData();
   }, []);
 
-  // Load danh sách folder khi chuyển sang tab Share
   useEffect(() => {
     if (currentView === 'share' && user) {
       loadShareFolders();
@@ -104,12 +116,15 @@ export default function App() {
     setIsLoading(true);
     setLoginError('');
     
+    // Nếu data chưa load xong, thử load lại
     let currentList = usersList;
-    if (!isUsersLoaded) {
+    if (!isDataLoaded) {
        try {
-         currentList = await fetchUsersFromOneDrive(config);
-         setUsersList(currentList);
-         setIsUsersLoaded(true);
+         const [u, c] = await Promise.all([fetchUsersFromOneDrive(config), fetchSystemConfig(config)]);
+         currentList = u;
+         setUsersList(u);
+         setSystemConfig(c);
+         setIsDataLoaded(true);
        } catch (ex) { console.log("Retry load data failed"); }
     }
 
@@ -118,6 +133,7 @@ export default function App() {
       if (loggedUser) {
         setUser(loggedUser);
         setCurrentView('camera');
+        setShowDisclaimer(true); // Hiển thị popup sau khi login thành công
       } else {
         setLoginError('Tài khoản hoặc mật khẩu không đúng.');
       }
@@ -136,6 +152,7 @@ export default function App() {
     setShareFolders([]);
     setShareFiles([]);
     setCurrentShareFolder(null);
+    setShowDisclaimer(false);
   };
 
   const handleReloadDB = async () => {
@@ -151,6 +168,26 @@ export default function App() {
     }
   };
 
+  const handleSaveSystemConfig = async () => {
+    if (!confirm("Bạn có chắc chắn muốn thay đổi giao diện cho TOÀN BỘ hệ thống không?")) return;
+    setIsSavingConfig(true);
+    try {
+      const success = await saveSystemConfig(tempSysConfig, config);
+      if (success) {
+        setSystemConfig(tempSysConfig);
+        alert("Đã lưu cấu hình thành công!");
+      } else {
+        alert("Lỗi lưu cấu hình.");
+      }
+    } catch(e) {
+      console.error(e);
+      alert("Có lỗi xảy ra.");
+    } finally {
+      setIsSavingConfig(false);
+    }
+  };
+
+  // ... (Giữ nguyên các hàm handleFileSelection, loadShareFolders, openShareFolder, handleCreateLink, getFileIcon, getPreview)
   const handleFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
@@ -196,13 +233,12 @@ export default function App() {
     event.target.value = '';
   };
 
-  // --- SHARE HANDLERS ---
   const loadShareFolders = async () => {
     if (!user) return;
     setIsLoadingShare(true);
     try {
       const folders = await listUserMonthFolders(config, user);
-      setShareFolders(folders.sort((a: any, b: any) => b.name.localeCompare(a.name))); // Sort mới nhất lên đầu
+      setShareFolders(folders.sort((a: any, b: any) => b.name.localeCompare(a.name)));
     } catch (e) {
       console.error(e);
     } finally {
@@ -229,11 +265,8 @@ export default function App() {
     if (!user) return;
     setSharingItem(itemName);
     try {
-      // Nếu đang trong folder con thì path = FolderName/FileName, nếu là folder thì path = FolderName
       const relativePath = isFolder ? itemName : `${currentShareFolder}/${itemName}`;
       const link = await createShareLink(config, user, relativePath);
-      
-      // Copy to clipboard
       await navigator.clipboard.writeText(link);
       alert(`Đã copy link chia sẻ ${isFolder ? 'thư mục' : 'file'}!\n\n${link}`);
     } catch (error: any) {
@@ -243,27 +276,18 @@ export default function App() {
     }
   };
 
-  // --- HELPERS HIỂN THỊ ---
   const getFileIcon = (file: File | { name: string, file?: any }) => {
     const name = 'name' in file ? file.name : (file as File).name;
     const type = 'type' in file ? (file as File).type : '';
-    
     if (type.startsWith('image/') || name.match(/\.(jpg|jpeg|png|gif|webp)$/i)) return <ImageIcon className="w-6 h-6 text-emerald-600" />;
     if (type.startsWith('video/') || name.match(/\.(mp4|mov|avi|mkv)$/i)) return <Film className="w-6 h-6 text-blue-600" />;
     if (name.match(/\.(zip|rar|7z)$/i)) return <FileArchive className="w-6 h-6 text-amber-600" />;
-    if (name.match(/\.(doc|docx|pdf|xls|xlsx|ppt|pptx)$/i)) return <Files className="w-6 h-6 text-slate-600" />;
     return <FileIcon className="w-6 h-6 text-slate-400" />;
   };
 
   const getPreview = (record: PhotoRecord) => {
-    if (record.previewUrl) {
-      return <img src={record.previewUrl} alt="Preview" className="w-16 h-16 object-cover rounded-lg bg-slate-100 border border-slate-200" />;
-    }
-    return (
-      <div className="w-16 h-16 flex items-center justify-center rounded-lg bg-slate-100 border border-slate-200">
-        {getFileIcon(record.file)}
-      </div>
-    );
+    if (record.previewUrl) return <img src={record.previewUrl} alt="Preview" className="w-16 h-16 object-cover rounded-lg bg-slate-100 border border-slate-200" />;
+    return <div className="w-16 h-16 flex items-center justify-center rounded-lg bg-slate-100 border border-slate-200">{getFileIcon(record.file)}</div>;
   };
 
   // --- USER MANAGEMENT HANDLERS ---
@@ -319,31 +343,35 @@ export default function App() {
   };
 
   // --- RENDER ---
+  const themeStyle = { backgroundColor: systemConfig.themeColor };
+  const textThemeStyle = { color: systemConfig.themeColor };
+  const buttonStyle = { backgroundColor: systemConfig.themeColor };
 
   if (!user) {
-    // Login Screen (Unchanged logic, just keeping structure)
     return (
-      <div className="min-h-screen bg-primary-50 flex flex-col justify-center px-6">
-        <div className="bg-white p-8 rounded-2xl shadow-xl border border-primary-100 max-w-sm w-full mx-auto">
+      <div className="min-h-screen bg-slate-50 flex flex-col justify-center px-6">
+        <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full mx-auto">
           <div className="flex justify-center mb-6">
-            <div className="w-20 h-20 bg-primary-100 rounded-full flex items-center justify-center border-4 border-white shadow-sm">
-              <img src="https://cdn-icons-png.flaticon.com/512/6534/6534062.png" className="w-12 h-12" alt="Logo" />
+            <div className="w-24 h-24 rounded-full flex items-center justify-center border-4 border-white shadow-md overflow-hidden bg-white">
+              <img src={systemConfig.logoUrl} className="w-full h-full object-cover" alt="Logo" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-center text-primary-900 mb-1 uppercase tracking-tight">SnapSync 302</h1>
-          <p className="text-center text-primary-600 font-medium mb-6 text-sm">Hệ thống upload hình ảnh quân nhân</p>
+          <h1 className="text-2xl font-bold text-center mb-1 uppercase tracking-tight" style={textThemeStyle}>{systemConfig.appName}</h1>
+          <p className="text-center text-slate-500 font-medium mb-6 text-sm">Hệ thống upload hình ảnh quân nhân</p>
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Tài khoản</label>
-              <input type="text" value={username} onChange={e => setUsername(e.target.value)} className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:ring-primary-500 focus:outline-none transition-colors" placeholder="Nhập tên đăng nhập" />
+              <input type="text" value={username} onChange={e => setUsername(e.target.value)} className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:outline-none transition-colors focus:border-transparent" style={{ '--tw-ring-color': systemConfig.themeColor } as React.CSSProperties} placeholder="Nhập tên đăng nhập" />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Mật khẩu</label>
-              <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:ring-primary-500 focus:outline-none transition-colors" placeholder="Nhập mật khẩu" />
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:outline-none transition-colors focus:border-transparent" style={{ '--tw-ring-color': systemConfig.themeColor } as React.CSSProperties} placeholder="Nhập mật khẩu" />
             </div>
             {loginError && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg flex items-center"><Info className="w-4 h-4 mr-2" />{loginError}</div>}
-            {!isUsersLoaded && <div className="text-center text-xs text-blue-600 animate-pulse">Đang kết nối hệ thống dữ liệu...</div>}
-            <Button type="submit" className="w-full font-bold shadow-lg bg-primary-600 hover:bg-primary-700 text-white" isLoading={isLoading || !isUsersLoaded}>Đăng nhập</Button>
+            {!isDataLoaded && <div className="text-center text-xs text-blue-600 animate-pulse">Đang kết nối hệ thống...</div>}
+            <button type="submit" className="w-full font-bold shadow-lg text-white py-3 rounded-lg hover:opacity-90 transition-opacity" style={buttonStyle} disabled={isLoading || !isDataLoaded}>
+              {isLoading ? 'Đang xử lý...' : 'Đăng nhập'}
+            </button>
           </form>
           <div className="mt-8 text-center text-xs text-slate-400">{APP_VERSION_TEXT}</div>
         </div>
@@ -353,21 +381,48 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col max-w-md mx-auto shadow-2xl overflow-hidden relative">
-      <header className="bg-primary-700 px-6 py-4 flex justify-between items-center shadow-lg sticky top-0 z-20">
+      {/* Disclaimer Modal */}
+      {showDisclaimer && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+           <div className="bg-white rounded-2xl p-6 shadow-2xl max-w-sm w-full border-t-4 border-amber-500">
+              <div className="flex items-center text-amber-600 mb-3 font-bold text-lg">
+                <Shield className="w-6 h-6 mr-2" />
+                QUY ĐỊNH BẢO MẬT
+              </div>
+              <div className="text-slate-700 text-sm space-y-3 leading-relaxed text-justify">
+                <p>Đây là cổng lưu trữ hình ảnh, video cuộc sống thường ngày của quân nhân, chiến sĩ Sư đoàn 302.</p>
+                <div className="bg-amber-50 p-3 rounded-lg border border-amber-100 flex gap-2">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                  <p className="font-medium text-amber-800">
+                    Vui lòng <strong>KHÔNG</strong> đăng tải các hình ảnh, video có nội dung bí mật quân sự, huấn luyện quân sự, các hình ảnh chống phá Đảng và Nhà nước.
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowDisclaimer(false)}
+                className="w-full mt-6 py-3 rounded-xl font-bold text-white shadow-lg hover:opacity-90 active:scale-95 transition-all"
+                style={buttonStyle}
+              >
+                TÔI ĐÃ HIỂU VÀ ĐỒNG Ý
+              </button>
+           </div>
+        </div>
+      )}
+
+      <header className="px-6 py-4 flex justify-between items-center shadow-lg sticky top-0 z-20 transition-colors" style={themeStyle}>
         <div>
-          <h2 className="font-bold text-white text-lg tracking-wide">SNAPSYNC 302</h2>
-          <div className="flex items-center text-primary-100 text-xs mt-0.5">
-            <span className="bg-primary-800 px-1.5 py-0.5 rounded mr-2 truncate max-w-[120px]">{user.unit.split('/').pop()}</span>
+          <h2 className="font-bold text-white text-lg tracking-wide uppercase">{systemConfig.appName}</h2>
+          <div className="flex items-center text-white/80 text-xs mt-0.5">
+            <span className="bg-white/20 px-1.5 py-0.5 rounded mr-2 truncate max-w-[120px]">{user.unit.split('/').pop()}</span>
             <span>{user.displayName}</span>
           </div>
         </div>
-        <button onClick={handleLogout} className="p-2 text-primary-200 hover:text-white transition-colors bg-primary-800/50 rounded-lg">
+        <button onClick={handleLogout} className="p-2 text-white/70 hover:text-white transition-colors bg-black/10 rounded-lg">
           <LogOut className="w-5 h-5" />
         </button>
       </header>
 
       <main className="flex-1 overflow-y-auto p-4 pb-24 scroll-smooth bg-slate-50">
-        {/* Hidden Inputs Updated Accept Attribute */}
         <input type="file" accept="*/*" capture="environment" ref={cameraInputRef} onChange={handleFileSelection} className="hidden" />
         <input type="file" multiple accept="*/*" ref={multiFileInputRef} onChange={handleFileSelection} className="hidden" />
         <input type="file" 
@@ -377,13 +432,17 @@ export default function App() {
         {currentView === 'camera' && (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
-              <h3 className="text-lg font-bold text-primary-800 mb-2">Upload Tài liệu/Đa phương tiện</h3>
+              <h3 className="text-lg font-bold mb-2" style={textThemeStyle}>Upload Tài liệu/Đa phương tiện</h3>
               <p className="text-slate-500 text-sm mb-4">
                 Lưu trữ: <code className="bg-slate-100 px-1 rounded text-xs">.../{user.username}/T{(new Date().getMonth() + 1).toString().padStart(2, '0')}</code>
               </p>
               
               <div className="space-y-3">
-                <button onClick={() => cameraInputRef.current?.click()} className="w-full bg-emerald-600 text-white py-4 rounded-xl font-bold flex items-center justify-center text-lg hover:bg-emerald-700 active:scale-95 transition-all shadow-lg shadow-emerald-600/30">
+                <button 
+                  onClick={() => cameraInputRef.current?.click()} 
+                  className="w-full text-white py-4 rounded-xl font-bold flex items-center justify-center text-lg hover:opacity-90 active:scale-95 transition-all shadow-lg"
+                  style={buttonStyle}
+                >
                   <Camera className="w-8 h-8 mr-3" />
                   CHỤP ẢNH
                 </button>
@@ -391,7 +450,7 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-3">
                   <button onClick={() => multiFileInputRef.current?.click()} className="bg-white border border-slate-200 text-slate-700 py-3 rounded-xl font-medium flex flex-col items-center justify-center hover:bg-slate-50 active:scale-95 transition-all shadow-sm">
                     <Files className="w-6 h-6 mb-1 text-blue-600" />
-                    <span className="text-xs">Chọn File (Ảnh/Video/Zip)</span>
+                    <span className="text-xs">Chọn File</span>
                   </button>
                   <button onClick={() => folderInputRef.current?.click()} className="bg-white border border-slate-200 text-slate-700 py-3 rounded-xl font-medium flex flex-col items-center justify-center hover:bg-slate-50 active:scale-95 transition-all shadow-sm">
                     <FolderUp className="w-6 h-6 mb-1 text-amber-600" />
@@ -406,9 +465,8 @@ export default function App() {
                 <History className="w-4 h-4 mr-2 text-slate-400" />
                 Hoạt động gần đây
               </h3>
-              <button onClick={() => setCurrentView('history')} className="text-xs text-primary-600 font-bold hover:underline">Xem tất cả</button>
+              <button onClick={() => setCurrentView('history')} className="text-xs font-bold hover:underline" style={textThemeStyle}>Xem tất cả</button>
             </div>
-            {/* Recent files list code ... */}
             {photos.length === 0 ? (
               <div className="text-center py-12 text-slate-400 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
                 <ImageIcon className="w-12 h-12 mx-auto mb-3 opacity-20" />
@@ -462,12 +520,11 @@ export default function App() {
         {currentView === 'share' && (
           <div className="space-y-4">
             <h3 className="font-bold text-slate-800 text-lg flex items-center">
-              <Share2 className="w-5 h-5 mr-2 text-primary-600" />
+              <Share2 className="w-5 h-5 mr-2" style={textThemeStyle} />
               Chia sẻ dữ liệu
             </h3>
-
+            {/* ...Share Logic (Giữ nguyên) ... */}
             {!currentShareFolder ? (
-              // --- VIEW 1: Danh sách thư mục (Tháng) ---
               <div className="space-y-3">
                 <p className="text-sm text-slate-500 mb-2">Chọn thư mục tháng để xem và chia sẻ.</p>
                 {isLoadingShare ? (
@@ -484,12 +541,7 @@ export default function App() {
                            <p className="text-xs text-slate-400">Thư mục tháng</p>
                          </div>
                        </div>
-                       <button 
-                         onClick={() => handleCreateLink(folder.name, true)}
-                         disabled={sharingItem === folder.name}
-                         className="p-2 ml-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
-                         title="Copy link chia sẻ thư mục"
-                       >
+                       <button onClick={() => handleCreateLink(folder.name, true)} disabled={sharingItem === folder.name} className="p-2 ml-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors">
                          {sharingItem === folder.name ? <Loader2 className="w-5 h-5 animate-spin" /> : <LinkIcon className="w-5 h-5" />}
                        </button>
                     </div>
@@ -497,31 +549,18 @@ export default function App() {
                 )}
               </div>
             ) : (
-              // --- VIEW 2: Danh sách file trong folder ---
               <div className="space-y-3 animate-in fade-in slide-in-from-right-4 duration-300">
                 <button onClick={() => { setCurrentShareFolder(null); setShareFiles([]); }} className="text-sm font-bold text-slate-500 hover:text-primary-600 flex items-center mb-2">
                   <ChevronLeft className="w-4 h-4 mr-1" /> Quay lại
                 </button>
                 <div className="flex items-center justify-between mb-4">
-                  <h4 className="font-bold text-slate-800 flex items-center">
-                    <FolderOpen className="w-5 h-5 text-amber-400 mr-2" /> 
-                    {currentShareFolder}
-                  </h4>
-                  <button 
-                     onClick={() => handleCreateLink(currentShareFolder!, true)}
-                     disabled={sharingItem === currentShareFolder}
-                     className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg flex items-center font-bold shadow-sm active:scale-95"
-                  >
-                     {sharingItem === currentShareFolder ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <LinkIcon className="w-3 h-3 mr-1" />}
-                     Share Folder
+                  <h4 className="font-bold text-slate-800 flex items-center"><FolderOpen className="w-5 h-5 text-amber-400 mr-2" /> {currentShareFolder}</h4>
+                  <button onClick={() => handleCreateLink(currentShareFolder!, true)} disabled={sharingItem === currentShareFolder} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg flex items-center font-bold shadow-sm active:scale-95">
+                     {sharingItem === currentShareFolder ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <LinkIcon className="w-3 h-3 mr-1" />} Share Folder
                   </button>
                 </div>
-
-                {isLoadingShare ? (
-                  <div className="py-8 text-center text-slate-400"><Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" /> Đang tải file...</div>
-                ) : shareFiles.length === 0 ? (
-                  <p className="text-center text-slate-400 py-8">Thư mục trống</p>
-                ) : (
+                {isLoadingShare ? <div className="py-8 text-center text-slate-400"><Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" /> Đang tải file...</div> : 
+                  shareFiles.length === 0 ? <p className="text-center text-slate-400 py-8">Thư mục trống</p> : 
                   shareFiles.map(file => (
                     <div key={file.id} className="bg-white p-3 rounded-lg border border-slate-100 flex items-center justify-between">
                        <div className="flex items-center min-w-0 flex-1">
@@ -531,33 +570,79 @@ export default function App() {
                            <p className="text-[10px] text-slate-400">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
                          </div>
                        </div>
-                       <button 
-                         onClick={() => handleCreateLink(file.name, false)}
-                         disabled={sharingItem === file.name}
-                         className="p-2 ml-2 text-slate-400 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 rounded-lg"
-                       >
+                       <button onClick={() => handleCreateLink(file.name, false)} disabled={sharingItem === file.name} className="p-2 ml-2 text-slate-400 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 rounded-lg">
                          {sharingItem === file.name ? <Loader2 className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
                        </button>
                     </div>
                   ))
-                )}
+                }
               </div>
             )}
           </div>
         )}
 
         {currentView === 'settings' && user.role === 'admin' && (
-          // ... (Admin Panel code remains mostly same, condensed for brevity)
           <div className="space-y-6">
             <h3 className="font-bold text-slate-800 text-xl flex items-center">
-              <Settings className="w-6 h-6 mr-2 text-primary-600" />
+              <Settings className="w-6 h-6 mr-2" style={textThemeStyle} />
               Quản trị hệ thống
             </h3>
             
+            {/* SYSTEM UI CONFIGURATION */}
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+              <h4 className="font-bold text-slate-700 flex items-center mb-4 border-b border-slate-100 pb-2">
+                <Palette className="w-4 h-4 mr-2 text-slate-500" />
+                Cài đặt giao diện
+              </h4>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Tên Ứng dụng</label>
+                  <input 
+                    className="w-full text-sm p-2 border rounded focus:ring-2 outline-none" 
+                    value={tempSysConfig.appName}
+                    onChange={e => setTempSysConfig({...tempSysConfig, appName: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Logo URL (Ảnh vuông)</label>
+                  <div className="flex gap-2">
+                    <img src={tempSysConfig.logoUrl} className="w-10 h-10 rounded-lg border object-cover bg-slate-50" />
+                    <input 
+                      className="w-full text-sm p-2 border rounded focus:ring-2 outline-none" 
+                      value={tempSysConfig.logoUrl}
+                      onChange={e => setTempSysConfig({...tempSysConfig, logoUrl: e.target.value})}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Màu chủ đạo</label>
+                  <div className="flex items-center gap-3">
+                    <input 
+                      type="color" 
+                      className="w-12 h-10 p-0 border-0 rounded cursor-pointer"
+                      value={tempSysConfig.themeColor}
+                      onChange={e => setTempSysConfig({...tempSysConfig, themeColor: e.target.value})}
+                    />
+                    <span className="text-sm font-mono bg-slate-100 px-2 py-1 rounded">{tempSysConfig.themeColor}</span>
+                  </div>
+                </div>
+                <button 
+                  onClick={handleSaveSystemConfig}
+                  disabled={isSavingConfig}
+                  className="w-full py-2.5 rounded-lg text-white font-bold text-sm shadow-md flex items-center justify-center hover:opacity-90 active:scale-95 transition-all"
+                  style={{ backgroundColor: tempSysConfig.themeColor }}
+                >
+                  {isSavingConfig ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
+                  LƯU CẤU HÌNH GIAO DIỆN
+                </button>
+              </div>
+            </div>
+
+            {/* USER MANAGEMENT (Giữ nguyên logic cũ) */}
             <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
                <div className="flex justify-between items-center mb-4">
                  <h4 className="font-bold text-slate-700 flex items-center">
-                   <Database className="w-4 h-4 mr-2" />
+                   <Users className="w-4 h-4 mr-2 text-slate-500" />
                    Danh sách cán bộ
                  </h4>
                  <div className="flex gap-2">
@@ -565,7 +650,7 @@ export default function App() {
                      <RefreshCw className={`w-3 h-3 ${isSavingUser ? 'animate-spin' : ''}`} />
                    </button>
                    {!isEditingUser && (
-                    <button onClick={() => startEditUser()} className="text-xs bg-primary-600 text-white px-3 py-2 rounded-lg font-bold flex items-center">
+                    <button onClick={() => startEditUser()} className="text-xs text-white px-3 py-2 rounded-lg font-bold flex items-center" style={buttonStyle}>
                       <Plus className="w-3 h-3 mr-1" /> Thêm mới
                     </button>
                    )}
@@ -573,9 +658,8 @@ export default function App() {
                </div>
 
                {isEditingUser ? (
-                 <form onSubmit={handleSaveUser} className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4 animate-in fade-in zoom-in duration-200">
-                    {/* ... Form inputs ... */}
-                    <h5 className="font-bold text-sm mb-3 text-primary-700">{editingUser.id ? 'Sửa thông tin' : 'Thêm cán bộ mới'}</h5>
+                 <form onSubmit={handleSaveUser} className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4">
+                    <h5 className="font-bold text-sm mb-3" style={textThemeStyle}>{editingUser.id ? 'Sửa thông tin' : 'Thêm cán bộ mới'}</h5>
                     <div className="space-y-3">
                       <input className="w-full text-sm p-2 border rounded" placeholder="Họ và tên" value={editingUser.displayName || ''} onChange={e => setEditingUser({...editingUser, displayName: e.target.value})} />
                       <input className="w-full text-sm p-2 border rounded" placeholder="Username" value={editingUser.username || ''} onChange={e => setEditingUser({...editingUser, username: e.target.value})} />
@@ -583,7 +667,7 @@ export default function App() {
                       <input className="w-full text-sm p-2 border rounded" placeholder="Đơn vị" list="unit-options" value={editingUser.unit || ''} onChange={e => setEditingUser({...editingUser, unit: e.target.value})} />
                       <datalist id="unit-options">{UNIT_SUGGESTIONS.map((unit, idx) => (<option key={idx} value={unit} />))}</datalist>
                       <div className="flex gap-2 mt-2">
-                        <Button type="submit" disabled={isSavingUser} className="py-2 text-sm flex-1 bg-primary-600 hover:bg-primary-700">{isSavingUser ? 'Đang lưu...' : 'Lưu'}</Button>
+                        <Button type="submit" disabled={isSavingUser} className="py-2 text-sm flex-1" style={buttonStyle}>{isSavingUser ? 'Đang lưu...' : 'Lưu'}</Button>
                         <Button type="button" variant="secondary" className="py-2 text-sm" onClick={() => setIsEditingUser(false)}>Hủy</Button>
                       </div>
                     </div>
@@ -607,26 +691,26 @@ export default function App() {
             </div>
             <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 text-xs text-emerald-800 flex items-start">
                <Database className="w-4 h-4 mr-2 mt-0.5 flex-shrink-0" />
-               <p>Dữ liệu cán bộ được lưu trữ trực tiếp trên file <code>System/users.json</code> trong OneDrive.</p>
+               <p>Dữ liệu được lưu trữ trực tiếp trên thư mục <code>System</code> trong OneDrive.</p>
             </div>
           </div>
         )}
       </main>
 
       <nav className="bg-white border-t border-slate-200 flex justify-around items-center py-2 pb-safe absolute bottom-0 w-full z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-        <TabButton active={currentView === 'camera'} onClick={() => setCurrentView('camera')} icon={<Camera />} label="Upload" />
-        <TabButton active={currentView === 'share'} onClick={() => setCurrentView('share')} icon={<Share2 />} label="Chia sẻ" />
-        <TabButton active={currentView === 'history'} onClick={() => setCurrentView('history')} icon={<History />} label="Lịch sử" />
+        <TabButton active={currentView === 'camera'} onClick={() => setCurrentView('camera')} icon={<Camera />} label="Upload" color={systemConfig.themeColor} />
+        <TabButton active={currentView === 'share'} onClick={() => setCurrentView('share')} icon={<Share2 />} label="Chia sẻ" color={systemConfig.themeColor} />
+        <TabButton active={currentView === 'history'} onClick={() => setCurrentView('history')} icon={<History />} label="Lịch sử" color={systemConfig.themeColor} />
         {user.role === 'admin' && (
-          <TabButton active={currentView === 'settings'} onClick={() => setCurrentView('settings')} icon={<Settings />} label="Quản trị" />
+          <TabButton active={currentView === 'settings'} onClick={() => setCurrentView('settings')} icon={<Settings />} label="Quản trị" color={systemConfig.themeColor} />
         )}
       </nav>
     </div>
   );
 }
 
-const TabButton = ({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) => (
-  <button onClick={onClick} className={`flex flex-col items-center justify-center w-full py-1 transition-all duration-200 ${active ? 'text-primary-600 scale-105' : 'text-slate-400 hover:text-slate-600'}`}>
+const TabButton = ({ active, onClick, icon, label, color }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string, color?: string }) => (
+  <button onClick={onClick} className={`flex flex-col items-center justify-center w-full py-1 transition-all duration-200 ${active ? 'scale-105' : 'text-slate-400 hover:text-slate-600'}`} style={active ? { color: color } : {}}>
     <div className={`w-6 h-6 ${active ? 'fill-current' : ''}`}>
       {React.cloneElement(icon as React.ReactElement<any>, { size: 24, strokeWidth: active ? 2.5 : 2 })}
     </div>

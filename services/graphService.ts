@@ -1,6 +1,13 @@
 
-import { AppConfig, User } from '../types';
+import { AppConfig, User, SystemConfig } from '../types';
 import { INITIAL_USERS } from './mockAuth';
+
+// Cấu hình mặc định
+export const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
+  appName: "SnapSync 302",
+  logoUrl: "https://cdn-icons-png.flaticon.com/512/6534/6534062.png",
+  themeColor: "#059669" // Emerald 600
+};
 
 /**
  * Hàm gọi về Backend của chính mình (/api/token) để lấy Access Token mới nhất
@@ -79,6 +86,62 @@ export const saveUsersToOneDrive = async (users: User[], config: AppConfig): Pro
     return response.ok;
   } catch (error) {
     console.error("Lỗi lưu dữ liệu người dùng:", error);
+    return false;
+  }
+};
+
+/**
+ * SYSTEM CONFIG: Tải cấu hình App (Logo, Tên, Màu)
+ */
+export const fetchSystemConfig = async (config: AppConfig): Promise<SystemConfig> => {
+  if (config.simulateMode) return DEFAULT_SYSTEM_CONFIG;
+
+  try {
+    const token = await getFreshAccessToken();
+    const dbPath = `${config.targetFolder}/System/config.json`;
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${dbPath}:/content`;
+
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+
+    if (response.status === 404) return DEFAULT_SYSTEM_CONFIG;
+    if (!response.ok) throw new Error("Lỗi tải cấu hình hệ thống");
+
+    const data = await response.json();
+    return { ...DEFAULT_SYSTEM_CONFIG, ...data }; // Merge với default để tránh lỗi thiếu trường
+  } catch (error) {
+    console.warn("Dùng cấu hình mặc định:", error);
+    return DEFAULT_SYSTEM_CONFIG;
+  }
+};
+
+/**
+ * SYSTEM CONFIG: Lưu cấu hình App
+ */
+export const saveSystemConfig = async (sysConfig: SystemConfig, config: AppConfig): Promise<boolean> => {
+  if (config.simulateMode) return true;
+
+  try {
+    const token = await getFreshAccessToken();
+    const dbPath = `${config.targetFolder}/System/config.json`;
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${dbPath}:/content`;
+
+    const content = JSON.stringify(sysConfig, null, 2);
+
+    const response = await fetch(endpoint, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: content,
+    });
+
+    return response.ok;
+  } catch (error) {
+    console.error("Lỗi lưu cấu hình:", error);
     return false;
   }
 };
@@ -234,7 +297,6 @@ export const createShareLink = async (config: AppConfig, user: User, relativePat
     if (!response.ok) {
         // Nếu lỗi do Tenant cấm anonymous, thử fallback sang organization
         if (data.error?.code === 'notAllowed') {
-            console.warn("Anonymous sharing not allowed, trying organization scope.");
             const retryBody = { type: 'view', scope: 'organization' };
             const retryRes = await fetch(endpoint, {
                 method: 'POST',
