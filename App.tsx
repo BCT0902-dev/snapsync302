@@ -5,12 +5,12 @@ import { uploadToOneDrive } from './services/graphService';
 import { Button } from './components/Button';
 import { Camera, UploadCloud, LogOut, Info, Settings, History, CheckCircle, XCircle, Loader2, Image as ImageIcon } from 'lucide-react';
 
-const APP_VERSION = "2.0.1"; // Update version for better error handling
+const APP_VERSION = "2.1.0 (Live Ready)"; // Đánh dấu phiên bản đã cấu hình thật
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
   targetFolder: 'SnapSync_Uploads',
-  simulateMode: false, // Mặc định tắt giả lập để chạy thật
+  simulateMode: false, // QUAN TRỌNG: Tắt giả lập để upload thật
 };
 
 export default function App() {
