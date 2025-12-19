@@ -2,25 +2,48 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { User, PhotoRecord, UploadStatus, AppConfig } from './types';
 import { INITIAL_USERS, login } from './services/mockAuth';
-import { uploadToOneDrive } from './services/graphService';
+import { uploadToOneDrive, fetchUsersFromOneDrive, saveUsersToOneDrive } from './services/graphService';
 import { Button } from './components/Button';
-import { Camera, LogOut, Info, Settings, History, CheckCircle, XCircle, Loader2, Image as ImageIcon, Users, Trash2, Plus, Edit } from 'lucide-react';
+import { 
+  Camera, LogOut, Info, Settings, History, CheckCircle, XCircle, 
+  Loader2, Image as ImageIcon, Users, Trash2, Plus, Edit,
+  FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database
+} from 'lucide-react';
 
-const APP_VERSION = "3.0.2 (Sư đoàn 302)";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
-  targetFolder: 'SnapSync302', // Thư mục gốc mới
+  targetFolder: 'SnapSync302',
   simulateMode: false,
 };
 
+// Danh sách gợi ý đơn vị (Cập nhật mới)
+const UNIT_SUGGESTIONS = [
+  "Sư đoàn 302/Phòng Tham mưu", 
+  "Sư đoàn 302/Phòng Chính trị", 
+  "Sư đoàn 302/Phòng HC-KT",
+  "Trung đoàn 88/Ban Tham mưu",
+  "Trung đoàn 88/Ban Chính trị",
+  "Trung đoàn 88/Ban HC-KT",
+  "Trung đoàn 88/Tiểu đoàn 4/Đại đội 1",
+  "Trung đoàn 88/Tiểu đoàn 4/Đại đội 2",
+  "Trung đoàn 88/Tiểu đoàn 4/Đại đội 3",
+  "Trung đoàn 88/Tiểu đoàn 4/Đại đội 4",
+  "Trung đoàn 88/Tiểu đoàn 5/Đại đội 5",
+  "Trung đoàn 88/Tiểu đoàn 5/Đại đội 6",
+  "Trung đoàn 88/Tiểu đoàn 5/Đại đội 7",
+  "Trung đoàn 88/Tiểu đoàn 5/Đại đội 8",
+  "Trung đoàn 88/Tiểu đoàn 6/Đại đội 9",
+  "Trung đoàn 88/Tiểu đoàn 6/Đại đội 10",
+  "Trung đoàn 88/Tiểu đoàn 6/Đại đội 11",
+  "Trung đoàn 88/Tiểu đoàn 6/Đại đội 12",
+];
+
 export default function App() {
   // --- STATE ---
-  // Quản lý danh sách User (lưu localStorage để giả lập DB)
-  const [usersList, setUsersList] = useState<User[]>(() => {
-    const saved = localStorage.getItem('snapsync_users');
-    return saved ? JSON.parse(saved) : INITIAL_USERS;
-  });
+  const [usersList, setUsersList] = useState<User[]>(INITIAL_USERS);
+  const [isUsersLoaded, setIsUsersLoaded] = useState(false); // Trạng thái đã tải data chưa
 
   const [user, setUser] = useState<User | null>(null);
   const [username, setUsername] = useState('');
@@ -28,7 +51,6 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
   
-  // Views: camera, history, settings (Đã xóa blueprint)
   const [currentView, setCurrentView] = useState<'camera' | 'history' | 'settings'>('camera');
   const [photos, setPhotos] = useState<PhotoRecord[]>([]);
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
@@ -36,13 +58,28 @@ export default function App() {
   // User Management State
   const [isEditingUser, setIsEditingUser] = useState(false);
   const [editingUser, setEditingUser] = useState<Partial<User>>({});
+  const [isSavingUser, setIsSavingUser] = useState(false);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const multiFileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   // --- EFFECTS ---
+  
+  // 1. Load users từ OneDrive khi app khởi động
   useEffect(() => {
-    localStorage.setItem('snapsync_users', JSON.stringify(usersList));
-  }, [usersList]);
+    const initData = async () => {
+      try {
+        const cloudUsers = await fetchUsersFromOneDrive(config);
+        setUsersList(cloudUsers);
+      } catch (e) {
+        console.error("Lỗi khởi tạo data:", e);
+      } finally {
+        setIsUsersLoaded(true);
+      }
+    };
+    initData();
+  }, []);
 
   // --- HANDLERS ---
 
@@ -50,11 +87,24 @@ export default function App() {
     e.preventDefault();
     setIsLoading(true);
     setLoginError('');
+    
+    // Nếu data chưa load xong, thử load lại lần nữa trước khi login
+    let currentList = usersList;
+    if (!isUsersLoaded) {
+       try {
+         currentList = await fetchUsersFromOneDrive(config);
+         setUsersList(currentList);
+         setIsUsersLoaded(true);
+       } catch (ex) {
+         console.log("Retry load data failed");
+       }
+    }
+
     try {
-      // Truyền usersList hiện tại vào hàm login để check
-      const loggedUser = await login(username, password, usersList);
+      const loggedUser = await login(username, password, currentList);
       if (loggedUser) {
         setUser(loggedUser);
+        setCurrentView('camera');
       } else {
         setLoginError('Tài khoản hoặc mật khẩu không đúng.');
       }
@@ -72,87 +122,147 @@ export default function App() {
     setCurrentView('camera');
   };
 
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  // Hàm reload database thủ công
+  const handleReloadDB = async () => {
+    setIsSavingUser(true);
+    try {
+      const cloudUsers = await fetchUsersFromOneDrive(config);
+      setUsersList(cloudUsers);
+      alert("Đã cập nhật dữ liệu mới nhất từ hệ thống!");
+    } catch (e) {
+      alert("Lỗi cập nhật dữ liệu.");
+    } finally {
+      setIsSavingUser(false);
+    }
+  };
+
+  const handleFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
+    const fileArray = Array.from(files);
 
-    const file = files[0];
-    const previewUrl = URL.createObjectURL(file);
-    
-    const newPhoto: PhotoRecord = {
-      id: Date.now().toString(),
+    const newRecords: PhotoRecord[] = fileArray.map(file => ({
+      id: Date.now().toString() + Math.random().toString(),
       file,
-      previewUrl,
+      previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : '',
       status: UploadStatus.UPLOADING,
       timestamp: new Date(),
-    };
+    }));
 
-    setPhotos(prev => [newPhoto, ...prev]);
+    setPhotos(prev => [...newRecords, ...prev]);
+
+    for (const record of newRecords) {
+      try {
+        const result = await uploadToOneDrive(record.file, config, user);
+        setPhotos(prev => prev.map(p => {
+          if (p.id === record.id) {
+            return {
+              ...p,
+              status: result.success ? UploadStatus.SUCCESS : UploadStatus.ERROR,
+              uploadedUrl: result.url,
+              errorMessage: result.error
+            };
+          }
+          return p;
+        }));
+      } catch (error: any) {
+        setPhotos(prev => prev.map(p => {
+          if (p.id === record.id) {
+            return {
+              ...p,
+              status: UploadStatus.ERROR,
+              errorMessage: error.message || "Lỗi không xác định"
+            };
+          }
+          return p;
+        }));
+      }
+    }
+    event.target.value = '';
+  };
+
+  // --- HELPERS HIỂN THỊ ---
+  const getFileIcon = (file: File) => {
+    if (file.type.startsWith('image/')) return <ImageIcon className="w-6 h-6 text-emerald-600" />;
+    if (file.type.startsWith('video/')) return <Film className="w-6 h-6 text-blue-600" />;
+    if (file.name.endsWith('.zip') || file.name.endsWith('.rar')) return <FileArchive className="w-6 h-6 text-amber-600" />;
+    return <FileIcon className="w-6 h-6 text-slate-500" />;
+  };
+
+  const getPreview = (record: PhotoRecord) => {
+    if (record.previewUrl) {
+      return <img src={record.previewUrl} alt="Preview" className="w-16 h-16 object-cover rounded-lg bg-slate-100 border border-slate-200" />;
+    }
+    return (
+      <div className="w-16 h-16 flex items-center justify-center rounded-lg bg-slate-100 border border-slate-200">
+        {getFileIcon(record.file)}
+      </div>
+    );
+  };
+
+  // --- USER MANAGEMENT HANDLERS (SYNC WITH CLOUD) ---
+  
+  const handleDeleteUser = async (id: string) => {
+    if (!confirm('Bạn có chắc muốn xóa cán bộ này? Hành động này sẽ được lưu lên hệ thống ngay lập tức.')) return;
     
-    try {
-      const result = await uploadToOneDrive(file, config, user);
-      
-      setPhotos(prev => prev.map(p => {
-        if (p.id === newPhoto.id) {
-          return {
-            ...p,
-            status: result.success ? UploadStatus.SUCCESS : UploadStatus.ERROR,
-            uploadedUrl: result.url,
-            errorMessage: result.error
-          };
-        }
-        return p;
-      }));
-    } catch (error: any) {
-      console.error("Upload failed:", error);
-      setPhotos(prev => prev.map(p => {
-        if (p.id === newPhoto.id) {
-          return {
-            ...p,
-            status: UploadStatus.ERROR,
-            errorMessage: error.message || "Lỗi không xác định"
-          };
-        }
-        return p;
-      }));
+    setIsSavingUser(true);
+    const newList = usersList.filter(u => u.id !== id);
+    
+    // Optimistic update
+    setUsersList(newList);
+    
+    // Sync to Cloud
+    const success = await saveUsersToOneDrive(newList, config);
+    if (!success) {
+      alert("Lỗi: Không thể lưu thay đổi lên hệ thống OneDrive. Vui lòng kiểm tra kết nối.");
+      // Rollback logic could go here, but for simplicity we assume next reload fixes it
     }
-
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+    setIsSavingUser(false);
   };
 
-  // --- USER MANAGEMENT HANDLERS ---
-  const handleDeleteUser = (id: string) => {
-    if (confirm('Bạn có chắc muốn xóa cán bộ này?')) {
-      setUsersList(prev => prev.filter(u => u.id !== id));
-    }
-  };
-
-  const handleSaveUser = (e: React.FormEvent) => {
+  const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser.username || !editingUser.password || !editingUser.displayName || !editingUser.unit) {
       alert("Vui lòng điền đầy đủ thông tin");
       return;
     }
 
+    setIsSavingUser(true);
+    let newList = [...usersList];
+
     if (editingUser.id) {
-      // Edit existing
-      setUsersList(prev => prev.map(u => u.id === editingUser.id ? { ...u, ...editingUser } as User : u));
+      newList = newList.map(u => u.id === editingUser.id ? { ...u, ...editingUser } as User : u);
     } else {
-      // Add new
+      // Check duplicate username
+      if (newList.some(u => u.username.toLowerCase() === editingUser.username?.toLowerCase())) {
+        alert("Tên đăng nhập đã tồn tại!");
+        setIsSavingUser(false);
+        return;
+      }
+
       const newUser: User = {
         id: Date.now().toString(),
         username: editingUser.username,
         password: editingUser.password,
         displayName: editingUser.displayName,
         unit: editingUser.unit,
-        role: 'staff' // Mặc định là staff
+        role: 'staff'
       } as User;
-      setUsersList(prev => [...prev, newUser]);
+      newList.push(newUser);
     }
-    setIsEditingUser(false);
-    setEditingUser({});
+
+    // Update Local
+    setUsersList(newList);
+    
+    // Sync to Cloud
+    const success = await saveUsersToOneDrive(newList, config);
+    if (success) {
+      setIsEditingUser(false);
+      setEditingUser({});
+    } else {
+      alert("Lỗi: Không thể lưu dữ liệu lên OneDrive.");
+    }
+    setIsSavingUser(false);
   };
 
   const startEditUser = (u?: User) => {
@@ -202,13 +312,19 @@ export default function App() {
                 {loginError}
               </div>
             )}
+            
+            {!isUsersLoaded && (
+               <div className="text-center text-xs text-blue-600 animate-pulse">
+                 Đang kết nối hệ thống dữ liệu...
+               </div>
+            )}
 
-            <Button type="submit" className="w-full font-bold shadow-lg bg-primary-600 hover:bg-primary-700 text-white" isLoading={isLoading}>
+            <Button type="submit" className="w-full font-bold shadow-lg bg-primary-600 hover:bg-primary-700 text-white" isLoading={isLoading || !isUsersLoaded}>
               Đăng nhập
             </Button>
           </form>
           <div className="mt-8 text-center text-xs text-slate-400">
-            Sư đoàn 302 - Phiên bản {APP_VERSION}
+            {APP_VERSION_TEXT}
           </div>
         </div>
       </div>
@@ -221,7 +337,7 @@ export default function App() {
         <div>
           <h2 className="font-bold text-white text-lg tracking-wide">SNAPSYNC 302</h2>
           <div className="flex items-center text-primary-100 text-xs mt-0.5">
-            <span className="bg-primary-800 px-1.5 py-0.5 rounded mr-2">{user.unit}</span>
+            <span className="bg-primary-800 px-1.5 py-0.5 rounded mr-2 truncate max-w-[120px]">{user.unit.split('/').pop()}</span>
             <span>{user.displayName}</span>
           </div>
         </div>
@@ -235,29 +351,62 @@ export default function App() {
           type="file" 
           accept="image/*" 
           capture="environment"
-          ref={fileInputRef}
-          onChange={handleFileChange}
+          ref={cameraInputRef}
+          onChange={handleFileSelection}
+          className="hidden" 
+        />
+        <input 
+          type="file" 
+          multiple
+          accept="image/*,video/*,.zip,.rar" 
+          ref={multiFileInputRef}
+          onChange={handleFileSelection}
+          className="hidden" 
+        />
+        <input 
+          type="file" 
+          // @ts-ignore
+          webkitdirectory=""
+          directory=""
+          ref={folderInputRef}
+          onChange={handleFileSelection}
           className="hidden" 
         />
 
         {currentView === 'camera' && (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
-              <h3 className="text-lg font-bold text-primary-800 mb-2">Hệ thống đăng tải và lưu trữ hình ảnh Sư đoàn 302</h3>
-              <p className="text-slate-500 text-sm mb-6">
-                Ảnh sẽ được lưu tại: <br/>
-                <code className="bg-slate-100 px-1 py-0.5 rounded text-xs text-slate-600 mt-1 block w-fit">
-                   .../{user.unit}/{user.username}/{new Date().toISOString().split('T')[0]}
-                </code>
+              <h3 className="text-lg font-bold text-primary-800 mb-2">Upload Hình ảnh/Video</h3>
+              <p className="text-slate-500 text-sm mb-4">
+                Lưu trữ: <code className="bg-slate-100 px-1 rounded text-xs">.../{user.username}/T{(new Date().getMonth() + 1).toString().padStart(2, '0')}</code>
               </p>
               
-              <button 
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full bg-primary-600 text-white py-5 rounded-xl font-bold flex items-center justify-center text-lg hover:bg-primary-700 active:scale-95 transition-all shadow-lg shadow-primary-600/30"
-              >
-                <Camera className="w-8 h-8 mr-3" />
-                CHỤP & GỬI ẢNH
-              </button>
+              <div className="space-y-3">
+                <button 
+                  onClick={() => cameraInputRef.current?.click()}
+                  className="w-full bg-emerald-600 text-white py-4 rounded-xl font-bold flex items-center justify-center text-lg hover:bg-emerald-700 active:scale-95 transition-all shadow-lg shadow-emerald-600/30"
+                >
+                  <Camera className="w-8 h-8 mr-3" />
+                  CHỤP ẢNH
+                </button>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button 
+                    onClick={() => multiFileInputRef.current?.click()}
+                    className="bg-white border border-slate-200 text-slate-700 py-3 rounded-xl font-medium flex flex-col items-center justify-center hover:bg-slate-50 active:scale-95 transition-all shadow-sm"
+                  >
+                    <Files className="w-6 h-6 mb-1 text-blue-600" />
+                    <span className="text-xs">Chọn nhiều File</span>
+                  </button>
+                  <button 
+                    onClick={() => folderInputRef.current?.click()}
+                    className="bg-white border border-slate-200 text-slate-700 py-3 rounded-xl font-medium flex flex-col items-center justify-center hover:bg-slate-50 active:scale-95 transition-all shadow-sm"
+                  >
+                    <FolderUp className="w-6 h-6 mb-1 text-amber-600" />
+                    <span className="text-xs">Upload Thư mục</span>
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="flex justify-between items-center mt-8 mb-4 border-b border-slate-200 pb-2">
@@ -271,13 +420,13 @@ export default function App() {
             {photos.length === 0 ? (
               <div className="text-center py-12 text-slate-400 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
                 <ImageIcon className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                <p>Chưa có dữ liệu hình ảnh.</p>
+                <p>Chưa có dữ liệu.</p>
               </div>
             ) : (
               <div className="space-y-3">
                 {photos.slice(0, 3).map((photo) => (
                   <div key={photo.id} className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center">
-                    <img src={photo.previewUrl} alt="Preview" className="w-16 h-16 object-cover rounded-lg bg-slate-100 border border-slate-200" />
+                    {getPreview(photo)}
                     <div className="ml-4 flex-1 min-w-0">
                       <p className="text-sm font-medium text-slate-800 truncate">{photo.file.name}</p>
                       
@@ -312,8 +461,8 @@ export default function App() {
              {photos.length === 0 && <p className="text-slate-500 text-center">Trống</p>}
              {photos.map((photo) => (
               <div key={photo.id} className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center">
-                 <img src={photo.previewUrl} alt="Preview" className="w-12 h-12 object-cover rounded-lg bg-slate-100" />
-                 <div className="ml-3 flex-1">
+                 {getPreview(photo)}
+                 <div className="ml-3 flex-1 min-w-0">
                    <p className="text-sm font-medium text-slate-800 truncate">{photo.file.name}</p>
                    <div className="flex justify-between items-center mt-1">
                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
@@ -331,22 +480,29 @@ export default function App() {
           </div>
         )}
 
-        {currentView === 'settings' && (
+        {currentView === 'settings' && user.role === 'admin' && (
           <div className="space-y-6">
             <h3 className="font-bold text-slate-800 text-xl flex items-center">
               <Settings className="w-6 h-6 mr-2 text-primary-600" />
               Quản trị hệ thống
             </h3>
             
-            {/* Form thêm/sửa user */}
             <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
                <div className="flex justify-between items-center mb-4">
-                 <h4 className="font-bold text-slate-700">Danh sách cán bộ</h4>
-                 {!isEditingUser && (
-                   <button onClick={() => startEditUser()} className="text-xs bg-primary-600 text-white px-3 py-2 rounded-lg font-bold flex items-center">
-                     <Plus className="w-3 h-3 mr-1" /> Thêm mới
+                 <h4 className="font-bold text-slate-700 flex items-center">
+                   <Database className="w-4 h-4 mr-2" />
+                   Danh sách cán bộ
+                 </h4>
+                 <div className="flex gap-2">
+                   <button onClick={handleReloadDB} disabled={isSavingUser} className="text-xs bg-slate-100 text-slate-600 p-2 rounded-lg font-bold flex items-center hover:bg-slate-200">
+                     <RefreshCw className={`w-3 h-3 ${isSavingUser ? 'animate-spin' : ''}`} />
                    </button>
-                 )}
+                   {!isEditingUser && (
+                    <button onClick={() => startEditUser()} className="text-xs bg-primary-600 text-white px-3 py-2 rounded-lg font-bold flex items-center">
+                      <Plus className="w-3 h-3 mr-1" /> Thêm mới
+                    </button>
+                   )}
+                 </div>
                </div>
 
                {isEditingUser ? (
@@ -371,33 +527,49 @@ export default function App() {
                         value={editingUser.password || ''} 
                         onChange={e => setEditingUser({...editingUser, password: e.target.value})}
                       />
-                      <input 
-                        className="w-full text-sm p-2 border rounded" 
-                        placeholder="Đơn vị (VD: Tieu_doan_1)" 
-                        value={editingUser.unit || ''} 
-                        onChange={e => setEditingUser({...editingUser, unit: e.target.value})}
-                      />
+                      
+                      <div>
+                        <input 
+                          className="w-full text-sm p-2 border rounded" 
+                          placeholder="Chọn hoặc nhập Đơn vị..." 
+                          list="unit-options"
+                          value={editingUser.unit || ''} 
+                          onChange={e => setEditingUser({...editingUser, unit: e.target.value})}
+                        />
+                        <datalist id="unit-options">
+                          {UNIT_SUGGESTIONS.map((unit, idx) => (
+                            <option key={idx} value={unit} />
+                          ))}
+                        </datalist>
+                      </div>
+
                       <div className="flex gap-2 mt-2">
-                        <Button type="submit" className="py-2 text-sm flex-1 bg-primary-600 hover:bg-primary-700">Lưu</Button>
+                        <Button type="submit" disabled={isSavingUser} className="py-2 text-sm flex-1 bg-primary-600 hover:bg-primary-700">
+                           {isSavingUser ? 'Đang lưu...' : 'Lưu vào hệ thống'}
+                        </Button>
                         <Button type="button" variant="secondary" className="py-2 text-sm" onClick={() => setIsEditingUser(false)}>Hủy</Button>
                       </div>
                     </div>
                  </form>
                ) : (
                  <div className="space-y-3">
+                   {usersList.length === 0 && <p className="text-sm text-center text-slate-400 py-4">Chưa có dữ liệu.</p>}
                    {usersList.map(u => (
                      <div key={u.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
-                       <div>
-                         <p className="font-bold text-sm text-slate-800">{u.displayName}</p>
-                         <p className="text-xs text-slate-500">{u.unit} • {u.username}</p>
+                       <div className="overflow-hidden mr-2">
+                         <p className="font-bold text-sm text-slate-800 truncate">{u.displayName}</p>
+                         <p className="text-xs text-slate-500 truncate">{u.unit.split('/').slice(-2).join('/')} • {u.username}</p>
                        </div>
-                       <div className="flex gap-1">
+                       <div className="flex gap-1 flex-shrink-0">
                           <button onClick={() => startEditUser(u)} className="p-2 text-blue-500 bg-white rounded shadow-sm hover:bg-blue-50">
                             <Edit className="w-4 h-4" />
                           </button>
-                          <button onClick={() => handleDeleteUser(u.id)} className="p-2 text-red-500 bg-white rounded shadow-sm hover:bg-red-50">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {/* Không cho xóa chính mình (admin) */}
+                          {u.username !== 'admin' && (
+                            <button onClick={() => handleDeleteUser(u.id)} className="p-2 text-red-500 bg-white rounded shadow-sm hover:bg-red-50">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                        </div>
                      </div>
                    ))}
@@ -405,18 +577,23 @@ export default function App() {
                )}
             </div>
             
-            <div className="bg-orange-50 p-4 rounded-xl border border-orange-200 text-xs text-orange-800">
-               <strong>Lưu ý quản trị:</strong>
-               <p className="mt-1">Dữ liệu tài khoản hiện tại được lưu trên trình duyệt này. Nếu xóa cache, dữ liệu sẽ trở về mặc định.</p>
+            <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 text-xs text-emerald-800 flex items-start">
+               <Database className="w-4 h-4 mr-2 mt-0.5 flex-shrink-0" />
+               <div>
+                 <strong>Đồng bộ Real-time:</strong>
+                 <p className="mt-1">Dữ liệu cán bộ được lưu trữ trực tiếp trên file <code>System/users.json</code> trong OneDrive. Mọi thay đổi sẽ được cập nhật ngay lập tức cho tất cả Admin.</p>
+               </div>
             </div>
           </div>
         )}
       </main>
 
       <nav className="bg-white border-t border-slate-200 flex justify-around items-center py-2 pb-safe absolute bottom-0 w-full z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-        <TabButton active={currentView === 'camera'} onClick={() => setCurrentView('camera')} icon={<Camera />} label="Chụp ảnh" />
+        <TabButton active={currentView === 'camera'} onClick={() => setCurrentView('camera')} icon={<Camera />} label="Upload" />
         <TabButton active={currentView === 'history'} onClick={() => setCurrentView('history')} icon={<History />} label="Lịch sử" />
-        <TabButton active={currentView === 'settings'} onClick={() => setCurrentView('settings')} icon={<Settings />} label="Quản trị" />
+        {user.role === 'admin' && (
+          <TabButton active={currentView === 'settings'} onClick={() => setCurrentView('settings')} icon={<Settings />} label="Quản trị" />
+        )}
       </nav>
     </div>
   );
@@ -428,7 +605,7 @@ const TabButton = ({ active, onClick, icon, label }: { active: boolean, onClick:
     className={`flex flex-col items-center justify-center w-full py-1 transition-all duration-200 ${active ? 'text-primary-600 scale-105' : 'text-slate-400 hover:text-slate-600'}`}
   >
     <div className={`w-6 h-6 ${active ? 'fill-current' : ''}`}>
-      {React.cloneElement(icon as React.ReactElement, { size: 24, strokeWidth: active ? 2.5 : 2 })}
+      {React.cloneElement(icon as React.ReactElement<any>, { size: 24, strokeWidth: active ? 2.5 : 2 })}
     </div>
     <span className="text-[10px] font-bold mt-1">{label}</span>
   </button>
