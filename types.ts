@@ -1,8 +1,11 @@
+
 export interface User {
   id: string;
   username: string;
+  password?: string; // Lưu pass để hiển thị trong phần quản lý (Demo)
   role: 'admin' | 'staff';
   displayName: string;
+  unit: string; // Đơn vị công tác
 }
 
 export enum UploadStatus {
@@ -23,7 +26,7 @@ export interface PhotoRecord {
 }
 
 export interface AppConfig {
-  oneDriveToken: string; // In a real app, this comes from OAuth flow
+  oneDriveToken: string;
   targetFolder: string;
   simulateMode: boolean;
 }

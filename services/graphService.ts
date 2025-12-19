@@ -1,4 +1,5 @@
-import { AppConfig } from '../types';
+
+import { AppConfig, User } from '../types';
 
 /**
  * Hàm gọi về Backend của chính mình (/api/token) để lấy Access Token mới nhất
@@ -25,7 +26,7 @@ const getFreshAccessToken = async (): Promise<string> => {
 export const uploadToOneDrive = async (
   file: File, 
   config: AppConfig,
-  subFolder: string = "" // Cho phép chia thư mục theo user
+  user: User | null
 ): Promise<{ success: boolean; url?: string; error?: string }> => {
   
   // 1. Chế độ giả lập
@@ -40,15 +41,23 @@ export const uploadToOneDrive = async (
 
   // 2. Chế độ thật: Tự động lấy Token từ Backend
   try {
+    if (!user) throw new Error("Chưa đăng nhập");
+
     // Bước A: Lấy Token mới
     const token = await getFreshAccessToken();
 
-    // Bước B: Chuẩn bị đường dẫn (Folder gốc / Tên User / File)
-    const finalFolder = subFolder ? `${config.targetFolder}/${subFolder}` : config.targetFolder;
+    // Bước B: Chuẩn bị đường dẫn 
+    // Format: SnapSync302 / [Đơn vị] / [Username] / [Ngày tháng]
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const unitFolder = user.unit || 'Unknown_Unit';
+    const userFolder = user.username;
+    
+    // Đường dẫn đầy đủ
+    const fullPath = `${config.targetFolder}/${unitFolder}/${userFolder}/${today}`;
     const fileName = `${Date.now()}_${file.name}`;
     
-    // API Endpoint: Upload file nhỏ (<4MB). Với file lớn hơn cần dùng Upload Session (để sau)
-    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${finalFolder}/${fileName}:/content`;
+    // API Endpoint
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${fullPath}/${fileName}:/content`;
 
     // Bước C: Upload
     const response = await fetch(endpoint, {

@@ -1,6 +1,6 @@
 {
-  "name": "SnapSync Enterprise",
-  "description": "A secure, mobile-first Progressive Web App (PWA) for field staff to capture and automatically upload photos to corporate OneDrive accounts.",
+  "name": "SnapSync 302",
+  "description": "Hệ thống upload hình ảnh quân nhân Sư đoàn 302.",
   "requestFramePermissions": [
     "camera"
   ]
