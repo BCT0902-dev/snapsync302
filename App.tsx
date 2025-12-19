@@ -5,7 +5,7 @@ import { uploadToOneDrive } from './services/graphService';
 import { Button } from './components/Button';
 import { Camera, UploadCloud, LogOut, Info, Settings, History, CheckCircle, XCircle, Loader2, Image as ImageIcon } from 'lucide-react';
 
-const APP_VERSION = "2.0.0"; // Bump version for Backend Integration
+const APP_VERSION = "2.0.1"; // Update version for better error handling
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
@@ -76,13 +76,15 @@ export default function App() {
         }
         return p;
       }));
-    } catch (error) {
+    } catch (error: any) {
+      // Cải tiến: Hiển thị lỗi thực tế để dễ debug (ví dụ: Missing env vars)
+      console.error("Upload failed:", error);
       setPhotos(prev => prev.map(p => {
         if (p.id === newPhoto.id) {
           return {
             ...p,
             status: UploadStatus.ERROR,
-            errorMessage: "Lỗi hệ thống"
+            errorMessage: error.message || "Lỗi không xác định"
           };
         }
         return p;
@@ -221,7 +223,7 @@ export default function App() {
                         )}
                         {photo.status === UploadStatus.ERROR && (
                           <span className="text-xs text-red-500 flex items-center">
-                            <XCircle className="w-3 h-3 mr-1" /> Lỗi: {photo.errorMessage}
+                            <XCircle className="w-3 h-3 mr-1" /> {photo.errorMessage}
                           </span>
                         )}
                       </div>
@@ -250,6 +252,9 @@ export default function App() {
                      </span>
                      <span className="text-xs text-slate-400">{photo.timestamp.toLocaleTimeString()}</span>
                    </div>
+                   {photo.status === UploadStatus.ERROR && (
+                     <p className="text-[10px] text-red-500 mt-1">{photo.errorMessage}</p>
+                   )}
                  </div>
               </div>
             ))}

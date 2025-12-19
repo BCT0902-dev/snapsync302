@@ -17,7 +17,7 @@ export default async function handler(request: Request) {
   const tenantId = process.env.AZURE_TENANT_ID || 'common';
 
   if (!clientId || !clientSecret || !refreshToken) {
-    return new Response(JSON.stringify({ error: 'Server misconfiguration: Missing env vars' }), { status: 500 });
+    return new Response(JSON.stringify({ error: 'Server misconfiguration: Missing env vars on Vercel' }), { status: 500 });
   }
 
   try {
@@ -42,6 +42,15 @@ export default async function handler(request: Request) {
 
     if (!response.ok) {
       console.error("Token refresh failed:", data);
+      
+      // Bắt lỗi cụ thể sai Client Secret để báo cho Admin dễ sửa
+      if (data.error === 'invalid_client' || (data.error_description && data.error_description.includes('AADSTS7000215'))) {
+         return new Response(JSON.stringify({ 
+          error: 'Cấu hình sai AZURE_CLIENT_SECRET. Hãy chắc chắn bạn đã copy cột "Value" chứ không phải "Secret ID" trên Azure Portal.',
+          details: data 
+        }), { status: 500 });
+      }
+
       return new Response(JSON.stringify({ 
         error: data.error_description || 'Failed to refresh token',
         details: data 
