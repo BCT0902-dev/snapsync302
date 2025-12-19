@@ -13,10 +13,10 @@ import {
   Loader2, Image as ImageIcon, Users, Trash2, Plus, Edit,
   FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, Download,
-  AlertTriangle, Shield, Palette, Save
+  AlertTriangle, Shield, Palette, Save, UserPlus, Check
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.2";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.3";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
@@ -51,12 +51,17 @@ export default function App() {
   const [systemConfig, setSystemConfig] = useState<SystemConfig>(DEFAULT_SYSTEM_CONFIG);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
 
+  // Auth State
   const [user, setUser] = useState<User | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [showDisclaimer, setShowDisclaimer] = useState(false); // Popup state
+  
+  // Registration State
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [regData, setRegData] = useState({ username: '', password: '', displayName: '', unit: '' });
   
   // Views: camera, history, share, settings
   const [currentView, setCurrentView] = useState<'camera' | 'history' | 'share' | 'settings'>('camera');
@@ -131,14 +136,68 @@ export default function App() {
     try {
       const loggedUser = await login(username, password, currentList);
       if (loggedUser) {
-        setUser(loggedUser);
-        setCurrentView('camera');
-        setShowDisclaimer(true); // Hiển thị popup sau khi login thành công
+        // Kiểm tra trạng thái duyệt
+        if (loggedUser.status === 'pending') {
+          setLoginError('Tài khoản đang chờ phê duyệt!');
+        } else {
+          setUser(loggedUser);
+          setCurrentView('camera');
+          setShowDisclaimer(true); // Hiển thị popup sau khi login thành công
+        }
       } else {
         setLoginError('Tài khoản hoặc mật khẩu không đúng.');
       }
     } catch (err) {
       setLoginError('Lỗi kết nối.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!regData.username || !regData.password || !regData.displayName || !regData.unit) {
+      alert("Vui lòng điền đầy đủ thông tin!");
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      // Refresh user list first to ensure uniqueness
+      const currentList = await fetchUsersFromOneDrive(config);
+      setUsersList(currentList);
+
+      if (currentList.some(u => u.username.toLowerCase() === regData.username.toLowerCase())) {
+        alert("Tên đăng nhập đã tồn tại!");
+        setIsLoading(false);
+        return;
+      }
+
+      const newUser: User = {
+        id: Date.now().toString(),
+        username: regData.username,
+        password: regData.password,
+        displayName: regData.displayName,
+        unit: regData.unit,
+        role: 'staff',
+        status: 'pending' // Mặc định là pending
+      };
+
+      const newList = [...currentList, newUser];
+      const success = await saveUsersToOneDrive(newList, config);
+      
+      if (success) {
+        setUsersList(newList);
+        alert("Đăng ký thành công, vui lòng đăng nhập lại sau 5p hoặc liên hệ CNTT/f302.");
+        setIsRegistering(false);
+        setRegData({ username: '', password: '', displayName: '', unit: '' });
+      } else {
+        alert("Lỗi khi gửi yêu cầu đăng ký. Vui lòng thử lại.");
+      }
+
+    } catch (e) {
+      console.error(e);
+      alert("Lỗi kết nối.");
     } finally {
       setIsLoading(false);
     }
@@ -184,6 +243,25 @@ export default function App() {
       alert("Có lỗi xảy ra.");
     } finally {
       setIsSavingConfig(false);
+    }
+  };
+
+  const handleApproveUser = async (userToApprove: User) => {
+    if(!confirm(`Duyệt tài khoản ${userToApprove.displayName}?`)) return;
+    setIsSavingUser(true);
+    try {
+       const newList = usersList.map(u => u.id === userToApprove.id ? { ...u, status: 'active' } as User : u);
+       const success = await saveUsersToOneDrive(newList, config);
+       if(success) {
+         setUsersList(newList);
+       } else {
+         alert("Lỗi lưu dữ liệu.");
+       }
+    } catch(e) {
+      console.error(e);
+      alert("Lỗi hệ thống.");
+    } finally {
+      setIsSavingUser(false);
     }
   };
 
@@ -292,7 +370,7 @@ export default function App() {
 
   // --- USER MANAGEMENT HANDLERS ---
   const handleDeleteUser = async (id: string) => {
-    if (!confirm('Bạn có chắc muốn xóa cán bộ này?')) return;
+    if (!confirm('Bạn có chắc muốn xóa/từ chối tài khoản này?')) return;
     setIsSavingUser(true);
     const newList = usersList.filter(u => u.id !== id);
     setUsersList(newList);
@@ -322,7 +400,8 @@ export default function App() {
         password: editingUser.password,
         displayName: editingUser.displayName,
         unit: editingUser.unit,
-        role: 'staff'
+        role: 'staff',
+        status: 'active' // Admin tạo thì active luôn
       } as User;
       newList.push(newUser);
     }
@@ -350,7 +429,7 @@ export default function App() {
   if (!user) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col justify-center px-6">
-        <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full mx-auto">
+        <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full mx-auto animate-in fade-in zoom-in duration-300">
           <div className="flex justify-center mb-6">
             <div className="w-24 h-24 rounded-full flex items-center justify-center border-4 border-white shadow-md overflow-hidden bg-white">
               <img src={systemConfig.logoUrl} className="w-full h-full object-cover" alt="Logo" />
@@ -358,21 +437,42 @@ export default function App() {
           </div>
           <h1 className="text-2xl font-bold text-center mb-1 uppercase tracking-tight" style={textThemeStyle}>{systemConfig.appName}</h1>
           <p className="text-center text-slate-500 font-medium mb-6 text-sm">Hệ thống upload hình ảnh quân nhân</p>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Tài khoản</label>
-              <input type="text" value={username} onChange={e => setUsername(e.target.value)} className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:outline-none transition-colors focus:border-transparent" style={{ '--tw-ring-color': systemConfig.themeColor } as React.CSSProperties} placeholder="Nhập tên đăng nhập" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Mật khẩu</label>
-              <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:outline-none transition-colors focus:border-transparent" style={{ '--tw-ring-color': systemConfig.themeColor } as React.CSSProperties} placeholder="Nhập mật khẩu" />
-            </div>
-            {loginError && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg flex items-center"><Info className="w-4 h-4 mr-2" />{loginError}</div>}
-            {!isDataLoaded && <div className="text-center text-xs text-blue-600 animate-pulse">Đang kết nối hệ thống...</div>}
-            <button type="submit" className="w-full font-bold shadow-lg text-white py-3 rounded-lg hover:opacity-90 transition-opacity" style={buttonStyle} disabled={isLoading || !isDataLoaded}>
-              {isLoading ? 'Đang xử lý...' : 'Đăng nhập'}
-            </button>
-          </form>
+          
+          {isRegistering ? (
+            <form onSubmit={handleRegister} className="space-y-4 animate-in slide-in-from-right duration-300">
+              <h3 className="text-center font-bold text-lg text-slate-700">Đăng ký tài khoản mới</h3>
+              <input className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 outline-none text-sm" placeholder="Họ và tên hiển thị" value={regData.displayName} onChange={e => setRegData({...regData, displayName: e.target.value})} style={{ '--tw-ring-color': systemConfig.themeColor } as React.CSSProperties} />
+              <input className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 outline-none text-sm" placeholder="Đơn vị công tác" list="unit-options-reg" value={regData.unit} onChange={e => setRegData({...regData, unit: e.target.value})} style={{ '--tw-ring-color': systemConfig.themeColor } as React.CSSProperties} />
+              <datalist id="unit-options-reg">{UNIT_SUGGESTIONS.map((unit, idx) => (<option key={idx} value={unit} />))}</datalist>
+              <input className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 outline-none text-sm" placeholder="Tên đăng nhập" value={regData.username} onChange={e => setRegData({...regData, username: e.target.value})} style={{ '--tw-ring-color': systemConfig.themeColor } as React.CSSProperties} />
+              <input type="password" className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 outline-none text-sm" placeholder="Mật khẩu" value={regData.password} onChange={e => setRegData({...regData, password: e.target.value})} style={{ '--tw-ring-color': systemConfig.themeColor } as React.CSSProperties} />
+              
+              <button type="submit" className="w-full font-bold shadow-lg text-white py-3 rounded-lg hover:opacity-90 transition-opacity" style={buttonStyle} disabled={isLoading}>
+                 {isLoading ? 'Đang gửi yêu cầu...' : 'Gửi đăng ký'}
+              </button>
+              <button type="button" onClick={() => setIsRegistering(false)} className="w-full text-sm text-slate-500 hover:text-slate-800 py-2">Quay lại đăng nhập</button>
+            </form>
+          ) : (
+            <form onSubmit={handleLogin} className="space-y-4 animate-in slide-in-from-left duration-300">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Tài khoản</label>
+                <input type="text" value={username} onChange={e => setUsername(e.target.value)} className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:outline-none transition-colors focus:border-transparent" style={{ '--tw-ring-color': systemConfig.themeColor } as React.CSSProperties} placeholder="Nhập tên đăng nhập" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Mật khẩu</label>
+                <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:outline-none transition-colors focus:border-transparent" style={{ '--tw-ring-color': systemConfig.themeColor } as React.CSSProperties} placeholder="Nhập mật khẩu" />
+              </div>
+              {loginError && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg flex items-center"><Info className="w-4 h-4 mr-2" />{loginError}</div>}
+              {!isDataLoaded && <div className="text-center text-xs text-blue-600 animate-pulse">Đang kết nối hệ thống...</div>}
+              
+              <button type="submit" className="w-full font-bold shadow-lg text-white py-3 rounded-lg hover:opacity-90 transition-opacity" style={buttonStyle} disabled={isLoading || !isDataLoaded}>
+                {isLoading ? 'Đang xử lý...' : 'Đăng nhập'}
+              </button>
+              <div className="pt-2 text-center">
+                 <button type="button" onClick={() => setIsRegistering(true)} className="text-sm font-bold hover:underline" style={textThemeStyle}>Đăng ký tài khoản mới</button>
+              </div>
+            </form>
+          )}
           <div className="mt-8 text-center text-xs text-slate-400">{APP_VERSION_TEXT}</div>
         </div>
       </div>
@@ -588,6 +688,39 @@ export default function App() {
               Quản trị hệ thống
             </h3>
             
+             {/* PENDING APPROVALS LIST */}
+             <div className="bg-white p-5 rounded-xl shadow-sm border border-orange-200">
+               <h4 className="font-bold text-orange-700 flex items-center mb-4 border-b border-orange-100 pb-2">
+                 <UserPlus className="w-4 h-4 mr-2" />
+                 Yêu cầu duyệt tài khoản ({usersList.filter(u => u.status === 'pending').length})
+               </h4>
+               <div className="space-y-3">
+                 {usersList.filter(u => u.status === 'pending').length === 0 ? (
+                   <p className="text-sm text-slate-400 italic">Không có yêu cầu mới.</p>
+                 ) : (
+                   usersList.filter(u => u.status === 'pending').map(pendingUser => (
+                     <div key={pendingUser.id} className="flex flex-col bg-orange-50 p-3 rounded-lg border border-orange-100">
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                             <p className="font-bold text-slate-800 text-sm">{pendingUser.displayName}</p>
+                             <p className="text-xs text-slate-500">{pendingUser.username} • {pendingUser.unit.split('/').pop()}</p>
+                          </div>
+                          <span className="bg-orange-200 text-orange-800 text-[10px] px-2 py-0.5 rounded-full font-bold">Pending</span>
+                        </div>
+                        <div className="flex gap-2 mt-1">
+                           <button onClick={() => handleApproveUser(pendingUser)} disabled={isSavingUser} className="flex-1 bg-green-600 text-white py-1.5 rounded text-xs font-bold hover:bg-green-700 flex items-center justify-center">
+                             {isSavingUser ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3 mr-1" />} DUYỆT
+                           </button>
+                           <button onClick={() => handleDeleteUser(pendingUser.id)} disabled={isSavingUser} className="flex-1 bg-white border border-red-200 text-red-600 py-1.5 rounded text-xs font-bold hover:bg-red-50">
+                             TỪ CHỐI
+                           </button>
+                        </div>
+                     </div>
+                   ))
+                 )}
+               </div>
+             </div>
+
             {/* SYSTEM UI CONFIGURATION */}
             <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
               <h4 className="font-bold text-slate-700 flex items-center mb-4 border-b border-slate-100 pb-2">
@@ -643,7 +776,7 @@ export default function App() {
                <div className="flex justify-between items-center mb-4">
                  <h4 className="font-bold text-slate-700 flex items-center">
                    <Users className="w-4 h-4 mr-2 text-slate-500" />
-                   Danh sách cán bộ
+                   Danh sách cán bộ (Active)
                  </h4>
                  <div className="flex gap-2">
                    <button onClick={handleReloadDB} disabled={isSavingUser} className="text-xs bg-slate-100 text-slate-600 p-2 rounded-lg font-bold flex items-center hover:bg-slate-200">
@@ -674,7 +807,7 @@ export default function App() {
                  </form>
                ) : (
                  <div className="space-y-3">
-                   {usersList.map(u => (
+                   {usersList.filter(u => u.status !== 'pending').map(u => (
                      <div key={u.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
                        <div className="overflow-hidden mr-2">
                          <p className="font-bold text-sm text-slate-800 truncate">{u.displayName}</p>
@@ -688,10 +821,6 @@ export default function App() {
                    ))}
                  </div>
                )}
-            </div>
-            <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 text-xs text-emerald-800 flex items-start">
-               <Database className="w-4 h-4 mr-2 mt-0.5 flex-shrink-0" />
-               <p>Dữ liệu được lưu trữ trực tiếp trên thư mục <code>System</code> trong OneDrive.</p>
             </div>
           </div>
         )}

@@ -6,6 +6,7 @@ export interface User {
   role: 'admin' | 'staff';
   displayName: string;
   unit: string; // Đơn vị công tác
+  status?: 'active' | 'pending'; // Trạng thái tài khoản
 }
 
 export enum UploadStatus {

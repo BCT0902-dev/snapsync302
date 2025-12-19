@@ -13,7 +13,8 @@ export const INITIAL_USERS: User[] = [
     password: ADMIN_SECRET, 
     role: 'admin', 
     displayName: 'Quản Trị Hệ Thống', 
-    unit: 'Bo_chi_huy' 
+    unit: 'Bo_chi_huy',
+    status: 'active'
   },
   { 
     id: 'admin_backup', 
@@ -21,7 +22,8 @@ export const INITIAL_USERS: User[] = [
     password: ADMIN_SECRET, 
     role: 'admin', 
     displayName: 'Admin Dự Phòng', 
-    unit: 'Bo_chi_huy' 
+    unit: 'Bo_chi_huy',
+    status: 'active'
   },
 ];
 
