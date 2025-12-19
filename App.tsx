@@ -14,7 +14,7 @@ import {
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, Download
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.1";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
