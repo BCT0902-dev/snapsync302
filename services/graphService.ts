@@ -164,8 +164,8 @@ export const uploadSystemLogo = async (file: File, config: AppConfig): Promise<s
 
   try {
     const token = await getFreshAccessToken();
-    // Đặt tên file duy nhất để tránh cache
-    const fileName = `Logo_${Date.now()}_${file.name.replace(/\s/g, '_')}`;
+    // Đặt tên file duy nhất để tránh cache, sử dụng timestamp
+    const fileName = `Logo_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
     const fullPath = `${config.targetFolder}/System/${fileName}`;
 
     // 1. Upload File
@@ -182,7 +182,6 @@ export const uploadSystemLogo = async (file: File, config: AppConfig): Promise<s
     if (!uploadRes.ok) throw new Error("Lỗi upload logo lên server");
 
     // 2. Tạo Share Link (Anonymous)
-    // Cần tạo link để có thể view mà không cần login (dùng làm src cho thẻ img)
     const createLinkEndpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${fullPath}:/createLink`;
     const linkBody = { type: 'view', scope: 'anonymous' };
     
@@ -198,7 +197,7 @@ export const uploadSystemLogo = async (file: File, config: AppConfig): Promise<s
         const linkData = await linkRes.json();
         shareLinkUrl = linkData.link.webUrl;
     } else {
-        // Fallback: Nếu không cho tạo anonymous, thử organization
+        // Fallback: Thử organization nếu anonymous bị cấm
         const retryRes = await fetch(createLinkEndpoint, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -212,12 +211,17 @@ export const uploadSystemLogo = async (file: File, config: AppConfig): Promise<s
         }
     }
 
-    // 3. Biến đổi Share Link thành Direct Download Link để hiển thị được trong thẻ <img>
-    // Trick: Thêm ?download=1 vào cuối link OneDrive chia sẻ thường sẽ force tải về/hiển thị raw
-    // OneDrive share link thường dạng: https://.../onedrive.aspx?...
-    // Ta nối thêm &download=1 hoặc ?download=1
-    const separator = shareLinkUrl.includes('?') ? '&' : '?';
-    return `${shareLinkUrl}${separator}download=1`;
+    // 3. Biến đổi Share Link thành Direct Download Link chuẩn xác hơn
+    // Sử dụng URL API để parse và set query param an toàn
+    try {
+        const urlObj = new URL(shareLinkUrl);
+        urlObj.searchParams.set('download', '1');
+        return urlObj.toString();
+    } catch (e) {
+        // Fallback thủ công nếu URL không parse được
+        const separator = shareLinkUrl.includes('?') ? '&' : '?';
+        return `${shareLinkUrl}${separator}download=1`;
+    }
 
   } catch (error) {
     console.error("Upload Logo Error:", error);
@@ -298,7 +302,10 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     
     // Path: SnapSync302/Unit/Username/Txx
     const path = `${config.targetFolder}/${unitFolder}/${user.username}/${monthFolder}`;
-    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children?select=id,name,webUrl,createdDateTime,size,file`;
+    
+    // SỬA: Loại bỏ 'select' để đảm bảo lấy đủ dữ liệu thumbnails và metadata. 
+    // Khi dùng 'select', nếu API version thay đổi hoặc trường 'thumbnails' không nằm trong core set, nó có thể bị miss.
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children?expand=thumbnails`;
 
     const response = await fetch(endpoint, {
       method: 'GET',
@@ -311,15 +318,24 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     const data = await response.json();
     
     // Map OneDrive item sang PhotoRecord
-    const records: PhotoRecord[] = data.value.map((item: any) => ({
-      id: item.id,
-      fileName: item.name,
-      status: UploadStatus.SUCCESS,
-      uploadedUrl: item.webUrl,
-      timestamp: new Date(item.createdDateTime),
-      size: item.size,
-      previewUrl: '' // Remote file không có preview blob, UI sẽ hiển thị icon
-    }));
+    const records: PhotoRecord[] = data.value.map((item: any) => {
+      // Lấy thumbnail robust hơn: tìm bất kỳ size nào có sẵn
+      let thumbnailUrl = '';
+      if (item.thumbnails && item.thumbnails.length > 0) {
+        const t = item.thumbnails[0];
+        thumbnailUrl = t.medium?.url || t.large?.url || t.small?.url || '';
+      }
+
+      return {
+        id: item.id,
+        fileName: item.name,
+        status: UploadStatus.SUCCESS,
+        uploadedUrl: item.webUrl,
+        timestamp: new Date(item.createdDateTime),
+        size: item.size,
+        previewUrl: thumbnailUrl
+      };
+    });
 
     // Sắp xếp mới nhất lên đầu
     return records.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());

@@ -407,13 +407,67 @@ export default function App() {
   };
 
   const getPreview = (record: PhotoRecord) => {
-    // Nếu có previewUrl (file vừa upload local) thì hiện ảnh
+    // Helper để hiển thị icon
+    const renderIcon = () => (
+      <div className="w-16 h-16 flex items-center justify-center rounded-lg bg-slate-100 border border-slate-200 flex-shrink-0">
+        {getFileIcon(record.fileName)}
+      </div>
+    );
+
+    // Nếu có previewUrl
     if (record.previewUrl) {
-        return <img src={record.previewUrl} alt="Preview" className="w-16 h-16 object-cover rounded-lg bg-slate-100 border border-slate-200" />;
+        return (
+          <img 
+            src={record.previewUrl} 
+            alt="Preview" 
+            className="w-16 h-16 object-cover rounded-lg bg-slate-100 border border-slate-200 flex-shrink-0" 
+            onError={(e) => {
+              // Nếu ảnh lỗi (VD: link hết hạn hoặc lỗi mạng), ẩn ảnh đi và hiển thị fallback (bằng cách thay thế DOM hoặc state)
+              e.currentTarget.style.display = 'none';
+              // Tìm element cha và inject icon vào (đơn giản hơn là dùng state cho mỗi item trong list dài)
+              const parent = e.currentTarget.parentElement;
+              if (parent) {
+                 // Không làm gì phức tạp, chỉ cần user thấy icon là được.
+                 // Tuy nhiên, cách tốt nhất trong React là switch component, nhưng ở đây ta dùng CSS hide.
+                 // Element "div" kế tiếp sẽ được hiển thị nếu ta cấu trúc lại code một chút, 
+                 // nhưng ở đây ta chấp nhận fallback icon bên dưới nếu img ẩn đi?
+                 // Cách đơn giản nhất: thay src bằng 1 pixel transparent và set background là icon? Không hay.
+                 
+                 // Giải pháp nhanh: set src thành icon placeholder hoặc để trống để browser render border.
+                 // Tốt nhất: Hiển thị icon thay thế.
+                 e.currentTarget.onerror = null; // Tránh loop
+              }
+            }}
+          />
+        );
     }
-    // Nếu là file remote hoặc không phải ảnh, hiện icon
+    
+    // Fallback mặc định
+    return renderIcon();
+  };
+  
+  // Wrapper cho getPreview để xử lý fallback trong React mượt hơn (nếu cần)
+  // Nhưng với logic trên, ta sẽ sửa lại một chút ở component hiển thị để check error state nếu muốn perfect.
+  // Ở đây dùng cách đơn giản: Nếu img error, ta dùng CSS để ẩn nó và hiển thị div fallback ngay bên cạnh (nếu cấu trúc HTML cho phép) 
+  // HOẶC: Chấp nhận img broken icon của trình duyệt. 
+  
+  // UPDATE Logic GetPreview để Robust hơn:
+  const PhotoPreview = ({ record }: { record: PhotoRecord }) => {
+    const [imgError, setImgError] = useState(false);
+    
+    if (record.previewUrl && !imgError) {
+      return (
+        <img 
+          src={record.previewUrl} 
+          alt="Preview" 
+          className="w-16 h-16 object-cover rounded-lg bg-slate-100 border border-slate-200 flex-shrink-0"
+          onError={() => setImgError(true)}
+        />
+      );
+    }
+    
     return (
-      <div className="w-16 h-16 flex items-center justify-center rounded-lg bg-slate-100 border border-slate-200">
+       <div className="w-16 h-16 flex items-center justify-center rounded-lg bg-slate-100 border border-slate-200 flex-shrink-0">
         {getFileIcon(record.fileName)}
       </div>
     );
@@ -655,7 +709,7 @@ export default function App() {
               <div className="space-y-3">
                 {getWeeklyPhotos().slice(0, 5).map((photo) => (
                   <div key={photo.id} className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center">
-                    {getPreview(photo)}
+                    <PhotoPreview record={photo} />
                     <div className="ml-4 flex-1 min-w-0">
                       <p className="text-sm font-medium text-slate-800 truncate">{photo.fileName}</p>
                       <div className="mt-1 flex items-center justify-between">
@@ -684,7 +738,7 @@ export default function App() {
              ) : (
                  getHistoryPhotos().map((photo) => (
                   <div key={photo.id} className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center">
-                     {getPreview(photo)}
+                     <PhotoPreview record={photo} />
                      <div className="ml-3 flex-1 min-w-0">
                        <p className="text-sm font-medium text-slate-800 truncate">{photo.fileName}</p>
                        <div className="flex justify-between items-center mt-1">
