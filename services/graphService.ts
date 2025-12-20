@@ -5,7 +5,7 @@ import { INITIAL_USERS } from './mockAuth';
 // Cấu hình mặc định
 export const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
   appName: "SnapSync 302",
-  logoUrl: "/logo302.png", // Sử dụng file nội bộ
+  logoUrl: "/logo302.svg", // Fallback ban đầu
   themeColor: "#059669" // Emerald 600
 };
 
@@ -127,8 +127,8 @@ export const fetchSystemConfig = async (config: AppConfig): Promise<SystemConfig
     if (!response.ok) throw new Error("Lỗi tải cấu hình hệ thống");
 
     const data = await response.json();
-    // Force logoUrl to be local file regardless of what's in DB to ensure consistency
-    return { ...DEFAULT_SYSTEM_CONFIG, ...data, logoUrl: "/logo302.png" }; 
+    // BỎ FORCE LOGO: Sử dụng dữ liệu từ Cloud nếu có, nếu không thì dùng mặc định
+    return { ...DEFAULT_SYSTEM_CONFIG, ...data }; 
   } catch (error) {
     console.warn("Dùng cấu hình mặc định:", error);
     return DEFAULT_SYSTEM_CONFIG;
@@ -146,9 +146,8 @@ export const saveSystemConfig = async (sysConfig: SystemConfig, config: AppConfi
     const dbPath = `${config.targetFolder}/System/config.json`;
     const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${dbPath}:/content`;
 
-    // Đảm bảo luôn lưu logoUrl là file tĩnh
-    const configToSave = { ...sysConfig, logoUrl: "/logo302.png" };
-    const content = JSON.stringify(configToSave, null, 2);
+    // Lưu toàn bộ config bao gồm cả logoUrl (có thể là base64 string)
+    const content = JSON.stringify(sysConfig, null, 2);
 
     const response = await fetch(endpoint, {
       method: 'PUT',

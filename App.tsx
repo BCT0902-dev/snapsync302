@@ -91,6 +91,7 @@ export default function App() {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const multiFileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   // --- EFFECTS ---
   useEffect(() => {
@@ -264,9 +265,7 @@ export default function App() {
     setIsSavingConfig(true);
     try {
       let finalConfig = { ...tempSysConfig };
-      // Luôn dùng logo302.png
-      finalConfig.logoUrl = "/logo302.png";
-
+      
       const success = await saveSystemConfig(finalConfig, config);
       if (success) {
         setSystemConfig(finalConfig);
@@ -300,6 +299,24 @@ export default function App() {
     } finally {
       setIsSavingUser(false);
     }
+  };
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Giới hạn kích thước file < 1MB để tránh làm nặng config file
+    if (file.size > 1024 * 1024) {
+      alert("Vui lòng chọn ảnh logo dung lượng nhỏ hơn 1MB.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64String = reader.result as string;
+      setTempSysConfig(prev => ({ ...prev, logoUrl: base64String }));
+    };
+    reader.readAsDataURL(file);
   };
 
   // ... Helper Functions ...
@@ -548,9 +565,9 @@ export default function App() {
         <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full mx-auto animate-in fade-in zoom-in duration-300">
           <div className="flex justify-center mb-6">
             <div className="w-24 h-24 rounded-full flex items-center justify-center border-4 border-white shadow-md overflow-hidden bg-white p-2">
-              {/* HARDCODED LOGO WITH LOCAL FALLBACK */}
+              {/* Logo from Config or Fallback */}
               <img 
-                src="/logo302.png" 
+                src={systemConfig.logoUrl || "/logo302.svg"} 
                 className="w-full h-full object-contain" 
                 alt="Logo" 
                 onError={(e) => {
@@ -874,18 +891,31 @@ export default function App() {
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Logo Ứng dụng</label>
                   <div className="flex gap-4 items-center">
                     <div className="w-16 h-16 rounded-lg border bg-slate-50 overflow-hidden flex-shrink-0 p-2">
-                      {/* HARDCODED LOGO WITH LOCAL FALLBACK */}
+                      {/* Logo Preview in Settings */}
                       <img 
-                        src="/logo302.png" 
+                        src={tempSysConfig.logoUrl || "/logo302.svg"} 
                         className="w-full h-full object-contain" 
                         alt="Preview" 
                         onError={(e) => { (e.target as HTMLImageElement).src = FALLBACK_LOGO_SRC; }} 
                       />
                     </div>
                     <div className="flex-1">
-                      <p className="text-sm font-bold text-slate-700">Logo mặc định</p>
+                      <p className="text-sm font-bold text-slate-700">Tải lên Logo mới</p>
+                      <input 
+                        type="file" 
+                        accept="image/*"
+                        ref={logoInputRef}
+                        className="hidden"
+                        onChange={handleLogoUpload}
+                      />
+                      <button 
+                        onClick={() => logoInputRef.current?.click()}
+                        className="mt-2 text-xs bg-slate-100 text-slate-700 px-3 py-2 rounded-lg font-bold border border-slate-200 hover:bg-slate-200 flex items-center"
+                      >
+                         <UploadCloud className="w-3 h-3 mr-1" /> Chọn file ảnh
+                      </button>
                       <p className="text-[10px] text-slate-400 mt-1">
-                        Sử dụng file nội bộ: <code className="bg-slate-100 px-1 rounded">public/logo302.png</code>
+                        Hỗ trợ: PNG, JPG (Max 1MB).
                       </p>
                     </div>
                   </div>
