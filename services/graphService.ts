@@ -17,6 +17,11 @@ export const getAccessToken = async (): Promise<string> => {
   try {
     const response = await fetch('/api/token');
     
+    // Check for 404 (API Route not found)
+    if (response.status === 404) {
+      throw new Error("API_NOT_FOUND");
+    }
+    
     // Kiểm tra Content-Type trước khi parse JSON
     const contentType = response.headers.get("content-type");
     if (!contentType || !contentType.includes("application/json")) {
@@ -32,7 +37,10 @@ export const getAccessToken = async (): Promise<string> => {
     
     return data.accessToken;
   } catch (error) {
-    console.error("Token Fetch Error:", error);
+    // Only log error if it's not a 404 check
+    if ((error as Error).message !== "API_NOT_FOUND") {
+      console.error("Token Fetch Error:", error);
+    }
     throw error;
   }
 };

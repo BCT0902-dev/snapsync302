@@ -92,10 +92,26 @@ export default function App() {
   // --- EFFECTS ---
   useEffect(() => {
     const initData = async () => {
+      let activeConfig = { ...config };
+
+      // 1. Check API Availability
+      try {
+        if (!config.simulateMode) {
+          // Attempt to fetch token. If 404, we are in preview/local mode.
+          await getAccessToken();
+        }
+      } catch (e: any) {
+         if (e.message === "API_NOT_FOUND" || e.message.includes("Invalid API Response")) {
+           console.warn("Backend API not found. Switching to Simulation Mode.");
+           activeConfig.simulateMode = true;
+           setConfig(prev => ({ ...prev, simulateMode: true }));
+         }
+      }
+
       try {
         const [cloudUsers, cloudConfig] = await Promise.all([
-          fetchUsersFromOneDrive(config),
-          fetchSystemConfig(config)
+          fetchUsersFromOneDrive(activeConfig),
+          fetchSystemConfig(activeConfig)
         ]);
         setUsersList(cloudUsers);
         setSystemConfig(cloudConfig);
