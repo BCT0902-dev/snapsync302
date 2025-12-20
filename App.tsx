@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { User, PhotoRecord, UploadStatus, AppConfig, SystemConfig } from './types';
 import { INITIAL_USERS, login } from './services/mockAuth';
@@ -6,7 +5,7 @@ import {
   uploadToOneDrive, fetchUsersFromOneDrive, saveUsersToOneDrive, 
   listUserMonthFolders, listFilesInMonthFolder, createShareLink,
   fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles,
-  uploadSystemLogo
+  getAccessToken
 } from './services/graphService';
 import { Button } from './components/Button';
 import { 
@@ -17,7 +16,7 @@ import {
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.5";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
@@ -78,8 +77,6 @@ export default function App() {
   // System Config State (For Admin Edit)
   const [tempSysConfig, setTempSysConfig] = useState<SystemConfig>(DEFAULT_SYSTEM_CONFIG);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
-  const [selectedLogoFile, setSelectedLogoFile] = useState<File | null>(null);
-  const [previewLogoUrl, setPreviewLogoUrl] = useState<string>('');
 
   // Share View State
   const [shareFolders, setShareFolders] = useState<any[]>([]);
@@ -91,7 +88,6 @@ export default function App() {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const multiFileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const logoInputRef = useRef<HTMLInputElement>(null);
 
   // --- EFFECTS ---
   useEffect(() => {
@@ -104,7 +100,6 @@ export default function App() {
         setUsersList(cloudUsers);
         setSystemConfig(cloudConfig);
         setTempSysConfig(cloudConfig);
-        setPreviewLogoUrl(cloudConfig.logoUrl);
       } catch (e) {
         console.error("Lỗi khởi tạo data:", e);
       } finally {
@@ -245,38 +240,18 @@ export default function App() {
     }
   };
 
-  const handleLogoSelection = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setSelectedLogoFile(file);
-      setPreviewLogoUrl(URL.createObjectURL(file));
-    }
-  };
-
   const handleSaveSystemConfig = async () => {
     if (!confirm("Bạn có chắc chắn muốn thay đổi giao diện cho TOÀN BỘ hệ thống không?")) return;
     setIsSavingConfig(true);
     try {
       let finalConfig = { ...tempSysConfig };
-      
-      // Nếu có chọn file logo mới thì upload trước
-      if (selectedLogoFile) {
-         try {
-           const newLogoUrl = await uploadSystemLogo(selectedLogoFile, config);
-           finalConfig.logoUrl = newLogoUrl;
-         } catch (uploadErr) {
-           console.error("Failed to upload logo:", uploadErr);
-           alert("Lỗi upload logo: " + (uploadErr as any).message);
-           setIsSavingConfig(false);
-           return;
-         }
-      }
+      // Luôn dùng logo302.png
+      finalConfig.logoUrl = "/logo302.png";
 
       const success = await saveSystemConfig(finalConfig, config);
       if (success) {
         setSystemConfig(finalConfig);
         setTempSysConfig(finalConfig);
-        setSelectedLogoFile(null); // Reset file selection
         alert("Đã lưu cấu hình thành công!");
       } else {
         alert("Lỗi lưu cấu hình.");
@@ -312,7 +287,7 @@ export default function App() {
   const handleFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
-    const fileArray = Array.from(files);
+    const fileArray = Array.from(files) as File[];
 
     const newRecords: PhotoRecord[] = fileArray.map(file => ({
       id: Date.now().toString() + Math.random().toString(),
@@ -406,66 +381,69 @@ export default function App() {
     return <FileIcon className="w-6 h-6 text-slate-400" />;
   };
 
-  const getPreview = (record: PhotoRecord) => {
-    // Helper để hiển thị icon
-    const renderIcon = () => (
-      <div className="w-16 h-16 flex items-center justify-center rounded-lg bg-slate-100 border border-slate-200 flex-shrink-0">
-        {getFileIcon(record.fileName)}
-      </div>
-    );
-
-    // Nếu có previewUrl
-    if (record.previewUrl) {
-        return (
-          <img 
-            src={record.previewUrl} 
-            alt="Preview" 
-            className="w-16 h-16 object-cover rounded-lg bg-slate-100 border border-slate-200 flex-shrink-0" 
-            onError={(e) => {
-              // Nếu ảnh lỗi (VD: link hết hạn hoặc lỗi mạng), ẩn ảnh đi và hiển thị fallback (bằng cách thay thế DOM hoặc state)
-              e.currentTarget.style.display = 'none';
-              // Tìm element cha và inject icon vào (đơn giản hơn là dùng state cho mỗi item trong list dài)
-              const parent = e.currentTarget.parentElement;
-              if (parent) {
-                 // Không làm gì phức tạp, chỉ cần user thấy icon là được.
-                 // Tuy nhiên, cách tốt nhất trong React là switch component, nhưng ở đây ta dùng CSS hide.
-                 // Element "div" kế tiếp sẽ được hiển thị nếu ta cấu trúc lại code một chút, 
-                 // nhưng ở đây ta chấp nhận fallback icon bên dưới nếu img ẩn đi?
-                 // Cách đơn giản nhất: thay src bằng 1 pixel transparent và set background là icon? Không hay.
-                 
-                 // Giải pháp nhanh: set src thành icon placeholder hoặc để trống để browser render border.
-                 // Tốt nhất: Hiển thị icon thay thế.
-                 e.currentTarget.onerror = null; // Tránh loop
-              }
-            }}
-          />
-        );
-    }
-    
-    // Fallback mặc định
-    return renderIcon();
-  };
-  
-  // Wrapper cho getPreview để xử lý fallback trong React mượt hơn (nếu cần)
-  // Nhưng với logic trên, ta sẽ sửa lại một chút ở component hiển thị để check error state nếu muốn perfect.
-  // Ở đây dùng cách đơn giản: Nếu img error, ta dùng CSS để ẩn nó và hiển thị div fallback ngay bên cạnh (nếu cấu trúc HTML cho phép) 
-  // HOẶC: Chấp nhận img broken icon của trình duyệt. 
-  
-  // UPDATE Logic GetPreview để Robust hơn:
+  // --- SECURE PHOTO PREVIEW ---
+  // Component này sẽ tự động thử tải ảnh, nếu lỗi 401/403 sẽ dùng Token để tải lại
   const PhotoPreview = ({ record }: { record: PhotoRecord }) => {
-    const [imgError, setImgError] = useState(false);
-    
-    if (record.previewUrl && !imgError) {
+    const [src, setSrc] = useState<string | undefined>(record.previewUrl);
+    const [hasError, setHasError] = useState(false);
+    const [isRetrying, setIsRetrying] = useState(false);
+
+    // Reset state khi record thay đổi
+    useEffect(() => {
+        setSrc(record.previewUrl);
+        setHasError(false);
+        setIsRetrying(false);
+    }, [record.previewUrl]);
+
+    const handleLoadError = async () => {
+        // Nếu đã retry hoặc không có URL, đánh dấu lỗi và dừng
+        if (isRetrying || !record.previewUrl) {
+            setHasError(true);
+            return;
+        }
+
+        // Bắt đầu retry bằng Token
+        setIsRetrying(true);
+        try {
+            const token = await getAccessToken();
+            const res = await fetch(record.previewUrl, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (res.ok) {
+                const blob = await res.blob();
+                const blobUrl = URL.createObjectURL(blob);
+                setSrc(blobUrl);
+                // Lưu ý: Blob URL cần được revoke khi unmount để tránh leak memory, 
+                // nhưng ở scope nhỏ này tạm thời chấp nhận.
+            } else {
+                setHasError(true);
+            }
+        } catch (e) {
+            console.error("Secure fetch failed", e);
+            setHasError(true);
+        }
+    };
+
+    if (src && !hasError) {
       return (
-        <img 
-          src={record.previewUrl} 
-          alt="Preview" 
-          className="w-16 h-16 object-cover rounded-lg bg-slate-100 border border-slate-200 flex-shrink-0"
-          onError={() => setImgError(true)}
-        />
+        <div className="relative w-16 h-16 flex-shrink-0">
+            <img 
+              src={src} 
+              alt="Preview" 
+              className="w-full h-full object-cover rounded-lg bg-slate-100 border border-slate-200"
+              onError={handleLoadError}
+            />
+            {isRetrying && (
+                <div className="absolute inset-0 flex items-center justify-center bg-white/50 rounded-lg">
+                    <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+                </div>
+            )}
+        </div>
       );
     }
     
+    // Fallback Icon
     return (
        <div className="w-16 h-16 flex items-center justify-center rounded-lg bg-slate-100 border border-slate-200 flex-shrink-0">
         {getFileIcon(record.fileName)}
@@ -545,14 +523,14 @@ export default function App() {
   const buttonStyle = { backgroundColor: systemConfig.themeColor };
 
   if (!user) {
-    // ... Login UI (Giữ nguyên)
+    // ... Login UI
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col justify-center px-6">
         <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full mx-auto animate-in fade-in zoom-in duration-300">
           <div className="flex justify-center mb-6">
             <div className="w-24 h-24 rounded-full flex items-center justify-center border-4 border-white shadow-md overflow-hidden bg-white">
-              <img src={systemConfig.logoUrl} className="w-full h-full object-cover" alt="Logo" onError={(e) => {
-                // Fallback nếu ảnh lỗi
+              {/* HARDCODED LOGO */}
+              <img src="/logo302.png" className="w-full h-full object-cover" alt="Logo" onError={(e) => {
                 (e.target as HTMLImageElement).src = "https://cdn-icons-png.flaticon.com/512/6534/6534062.png";
               }} />
             </div>
@@ -635,7 +613,7 @@ export default function App() {
         <div>
           <h2 className="font-bold text-white text-lg tracking-wide uppercase">{systemConfig.appName}</h2>
           <div className="flex items-center text-white/80 text-xs mt-0.5">
-            <span className="bg-white/20 px-1.5 py-0.5 rounded mr-2 truncate max-w-[120px]">{user.unit.split('/').pop()}</span>
+            <span className="bg-white/20 px-1.5 py-0.5 rounded mr-2 truncate max-w-[120px]">{user.unit.split('/').pop()?.replace('Bo_chi_huy', 'Quan_tri_vien')}</span>
             <span>{user.displayName}</span>
           </div>
         </div>
@@ -651,15 +629,6 @@ export default function App() {
           // @ts-ignore
           webkitdirectory="" directory="" ref={folderInputRef} onChange={handleFileSelection} className="hidden" />
           
-        {/* Input ẩn cho Logo Upload */}
-        <input 
-            type="file" 
-            accept="image/png, image/jpeg, image/gif" 
-            ref={logoInputRef} 
-            onChange={handleLogoSelection} 
-            className="hidden" 
-        />
-
         {currentView === 'camera' && (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
@@ -881,18 +850,13 @@ export default function App() {
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Logo Ứng dụng</label>
                   <div className="flex gap-4 items-center">
                     <div className="w-16 h-16 rounded-lg border bg-slate-50 overflow-hidden flex-shrink-0">
-                      <img src={previewLogoUrl || "https://cdn-icons-png.flaticon.com/512/6534/6534062.png"} className="w-full h-full object-cover" alt="Preview" onError={(e) => { (e.target as HTMLImageElement).src = "https://cdn-icons-png.flaticon.com/512/6534/6534062.png"; }} />
+                      {/* HARDCODED LOGO */}
+                      <img src="/logo302.png" className="w-full h-full object-cover" alt="Preview" onError={(e) => { (e.target as HTMLImageElement).src = "https://cdn-icons-png.flaticon.com/512/6534/6534062.png"; }} />
                     </div>
                     <div className="flex-1">
-                      <button 
-                        onClick={() => logoInputRef.current?.click()}
-                        className="w-full bg-slate-100 text-slate-700 py-2 rounded-lg text-xs font-bold border border-slate-200 hover:bg-slate-200 flex items-center justify-center"
-                      >
-                         <UploadCloud className="w-4 h-4 mr-2" />
-                         {selectedLogoFile ? "Đổi file khác" : "Chọn file ảnh mới"}
-                      </button>
-                      <p className="text-[10px] text-slate-400 mt-1 text-center">
-                        {selectedLogoFile ? `Đã chọn: ${selectedLogoFile.name}` : "Hỗ trợ: PNG, JPG, GIF"}
+                      <p className="text-sm font-bold text-slate-700">Logo mặc định</p>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Sử dụng file nội bộ: <code className="bg-slate-100 px-1 rounded">logo302.png</code>
                       </p>
                     </div>
                   </div>
