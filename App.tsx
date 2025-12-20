@@ -24,6 +24,9 @@ const DEFAULT_CONFIG: AppConfig = {
   simulateMode: false,
 };
 
+// Fallback Logo (Shield Icon dạng SVG Base64) để đảm bảo luôn hiển thị kể cả khi offline
+const FALLBACK_LOGO_SRC = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23059669' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/%3E%3Cpath d='M12 8v4'/%3E%3Cpath d='M12 16h.01'/%3E%3C/svg%3E";
+
 const UNIT_SUGGESTIONS = [
   "Sư đoàn 302/Phòng Tham mưu", 
   "Sư đoàn 302/Phòng Chính trị", 
@@ -101,7 +104,7 @@ export default function App() {
           await getAccessToken();
         }
       } catch (e: any) {
-         if (e.message === "API_NOT_FOUND" || e.message.includes("Invalid API Response")) {
+         if (e.message === "API_NOT_FOUND" || (e.message && e.message.includes("Invalid API Response"))) {
            console.warn("Backend API not found. Switching to Simulation Mode.");
            activeConfig.simulateMode = true;
            setConfig(prev => ({ ...prev, simulateMode: true }));
@@ -544,11 +547,16 @@ export default function App() {
       <div className="min-h-screen bg-slate-50 flex flex-col justify-center px-6">
         <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full mx-auto animate-in fade-in zoom-in duration-300">
           <div className="flex justify-center mb-6">
-            <div className="w-24 h-24 rounded-full flex items-center justify-center border-4 border-white shadow-md overflow-hidden bg-white">
-              {/* HARDCODED LOGO */}
-              <img src="/logo302.png" className="w-full h-full object-cover" alt="Logo" onError={(e) => {
-                (e.target as HTMLImageElement).src = "https://cdn-icons-png.flaticon.com/512/6534/6534062.png";
-              }} />
+            <div className="w-24 h-24 rounded-full flex items-center justify-center border-4 border-white shadow-md overflow-hidden bg-white p-2">
+              {/* HARDCODED LOGO WITH LOCAL FALLBACK */}
+              <img 
+                src="/logo302.png" 
+                className="w-full h-full object-contain" 
+                alt="Logo" 
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = FALLBACK_LOGO_SRC;
+                }} 
+              />
             </div>
           </div>
           <h1 className="text-2xl font-bold text-center mb-1 uppercase tracking-tight" style={textThemeStyle}>{systemConfig.appName}</h1>
@@ -865,14 +873,19 @@ export default function App() {
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Logo Ứng dụng</label>
                   <div className="flex gap-4 items-center">
-                    <div className="w-16 h-16 rounded-lg border bg-slate-50 overflow-hidden flex-shrink-0">
-                      {/* HARDCODED LOGO */}
-                      <img src="/logo302.png" className="w-full h-full object-cover" alt="Preview" onError={(e) => { (e.target as HTMLImageElement).src = "https://cdn-icons-png.flaticon.com/512/6534/6534062.png"; }} />
+                    <div className="w-16 h-16 rounded-lg border bg-slate-50 overflow-hidden flex-shrink-0 p-2">
+                      {/* HARDCODED LOGO WITH LOCAL FALLBACK */}
+                      <img 
+                        src="/logo302.png" 
+                        className="w-full h-full object-contain" 
+                        alt="Preview" 
+                        onError={(e) => { (e.target as HTMLImageElement).src = FALLBACK_LOGO_SRC; }} 
+                      />
                     </div>
                     <div className="flex-1">
                       <p className="text-sm font-bold text-slate-700">Logo mặc định</p>
                       <p className="text-[10px] text-slate-400 mt-1">
-                        Sử dụng file nội bộ: <code className="bg-slate-100 px-1 rounded">logo302.png</code>
+                        Sử dụng file nội bộ: <code className="bg-slate-100 px-1 rounded">public/logo302.png</code>
                       </p>
                     </div>
                   </div>
