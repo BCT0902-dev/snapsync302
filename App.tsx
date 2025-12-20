@@ -24,9 +24,6 @@ const DEFAULT_CONFIG: AppConfig = {
   simulateMode: false,
 };
 
-// Fallback Logo (Shield Icon dạng SVG Base64) để đảm bảo luôn hiển thị kể cả khi offline
-const FALLBACK_LOGO_SRC = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23059669' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/%3E%3Cpath d='M12 8v4'/%3E%3Cpath d='M12 16h.01'/%3E%3C/svg%3E";
-
 const UNIT_SUGGESTIONS = [
   "Sư đoàn 302/Phòng Tham mưu", 
   "Sư đoàn 302/Phòng Chính trị", 
@@ -51,7 +48,17 @@ const UNIT_SUGGESTIONS = [
 export default function App() {
   // --- STATE ---
   const [usersList, setUsersList] = useState<User[]>(INITIAL_USERS);
-  const [systemConfig, setSystemConfig] = useState<SystemConfig>(DEFAULT_SYSTEM_CONFIG);
+  
+  // Update: Khởi tạo systemConfig từ LocalStorage nếu có để hiển thị Logo ngay lập tức
+  const [systemConfig, setSystemConfig] = useState<SystemConfig>(() => {
+    try {
+      const saved = localStorage.getItem('systemConfig');
+      return saved ? JSON.parse(saved) : DEFAULT_SYSTEM_CONFIG;
+    } catch (e) {
+      return DEFAULT_SYSTEM_CONFIG;
+    }
+  });
+
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   
   // Splash Screen State
@@ -81,7 +88,7 @@ export default function App() {
   const [isSavingUser, setIsSavingUser] = useState(false);
   
   // System Config State (For Admin Edit)
-  const [tempSysConfig, setTempSysConfig] = useState<SystemConfig>(DEFAULT_SYSTEM_CONFIG);
+  const [tempSysConfig, setTempSysConfig] = useState<SystemConfig>(systemConfig); // Init from state
   const [isSavingConfig, setIsSavingConfig] = useState(false);
 
   // Share View State
@@ -130,8 +137,12 @@ export default function App() {
           fetchSystemConfig(activeConfig)
         ]);
         setUsersList(cloudUsers);
+        
+        // Cập nhật State và lưu vào LocalStorage để lần sau load nhanh hơn
         setSystemConfig(cloudConfig);
         setTempSysConfig(cloudConfig);
+        localStorage.setItem('systemConfig', JSON.stringify(cloudConfig));
+
       } catch (e) {
         console.error("Lỗi khởi tạo data:", e);
       } finally {
@@ -172,6 +183,7 @@ export default function App() {
          currentList = u;
          setUsersList(u);
          setSystemConfig(c);
+         localStorage.setItem('systemConfig', JSON.stringify(c)); // Update Cache
          setIsDataLoaded(true);
        } catch (ex) { console.log("Retry load data failed"); }
     }
@@ -282,6 +294,7 @@ export default function App() {
       if (success) {
         setSystemConfig(finalConfig);
         setTempSysConfig(finalConfig);
+        localStorage.setItem('systemConfig', JSON.stringify(finalConfig)); // Save cache immediately
         alert("Đã lưu cấu hình thành công!");
       } else {
         alert("Lỗi lưu cấu hình.");
@@ -585,9 +598,6 @@ export default function App() {
                   src={systemConfig.logoUrl || "/logo302.svg"} 
                   className="w-full h-full object-contain" 
                   alt="Logo" 
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).src = FALLBACK_LOGO_SRC;
-                  }} 
                 />
             </div>
          </div>
@@ -606,14 +616,11 @@ export default function App() {
         <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full mx-auto">
           <div className="flex justify-center mb-6">
             <div className="w-24 h-24 rounded-full flex items-center justify-center border-4 border-white shadow-md overflow-hidden bg-white p-2">
-              {/* Logo from Config or Fallback */}
+              {/* Logo from Config */}
               <img 
                 src={systemConfig.logoUrl || "/logo302.svg"} 
                 className="w-full h-full object-contain" 
                 alt="Logo" 
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = FALLBACK_LOGO_SRC;
-                }} 
               />
             </div>
           </div>
@@ -937,7 +944,7 @@ export default function App() {
                         src={tempSysConfig.logoUrl || "/logo302.svg"} 
                         className="w-full h-full object-contain" 
                         alt="Preview" 
-                        onError={(e) => { (e.target as HTMLImageElement).src = FALLBACK_LOGO_SRC; }} 
+                        onError={(e) => { (e.target as HTMLImageElement).src = "/logo302.svg"; }} 
                       />
                     </div>
                     <div className="flex-1">
