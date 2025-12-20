@@ -427,7 +427,12 @@ export default function App() {
       const relativePath = isFolder ? itemName : `${currentShareFolder}/${itemName}`;
       const link = await createShareLink(config, user, relativePath);
       await navigator.clipboard.writeText(link);
-      alert(`Đã copy link chia sẻ ${isFolder ? 'thư mục' : 'file'}!\n\n${link}`);
+      
+      const message = itemName === "" 
+        ? `Đã copy Link Tổng hợp (Toàn bộ dữ liệu)!\n\n${link}`
+        : `Đã copy link chia sẻ ${isFolder ? 'thư mục' : 'file'}!\n\n${link}`;
+
+      alert(message);
     } catch (error: any) {
       alert(`Lỗi tạo link: ${error.message}`);
     } finally {
@@ -822,10 +827,28 @@ export default function App() {
               <Share2 className="w-5 h-5 mr-2" style={textThemeStyle} />
               Chia sẻ dữ liệu
             </h3>
-            {/* ...Share Logic (Giữ nguyên) ... */}
+            
+            {/* ...Share Logic ... */}
             {!currentShareFolder ? (
               <div className="space-y-3">
                 <p className="text-sm text-slate-500 mb-2">Chọn thư mục tháng để xem và chia sẻ.</p>
+                
+                {/* NEW: MASTER LINK BUTTON */}
+                <div className="bg-gradient-to-r from-emerald-500 to-teal-600 rounded-xl p-4 text-white shadow-lg flex items-center justify-between mb-4">
+                  <div>
+                    <h4 className="font-bold flex items-center"><Database className="w-5 h-5 mr-2" /> Link Tổng Hợp</h4>
+                    <p className="text-emerald-100 text-xs mt-1">Chia sẻ toàn bộ dữ liệu của: {user.displayName}</p>
+                  </div>
+                  <button 
+                    onClick={() => handleCreateLink("", true)} 
+                    disabled={sharingItem === ""}
+                    className="bg-white/20 hover:bg-white/30 p-2 px-3 rounded-lg backdrop-blur-sm transition-all active:scale-95 flex items-center font-bold text-xs border border-white/30"
+                  >
+                    {sharingItem === "" ? <Loader2 className="w-5 h-5 animate-spin" /> : <><LinkIcon className="w-4 h-4 mr-2" /> Copy Link</>}
+                  </button>
+                </div>
+                {/* END NEW */}
+
                 {isLoadingShare ? (
                   <div className="py-8 text-center text-slate-400"><Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" /> Đang tải danh sách...</div>
                 ) : shareFolders.length === 0 ? (
