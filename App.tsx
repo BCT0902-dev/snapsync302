@@ -53,6 +53,9 @@ export default function App() {
   const [usersList, setUsersList] = useState<User[]>(INITIAL_USERS);
   const [systemConfig, setSystemConfig] = useState<SystemConfig>(DEFAULT_SYSTEM_CONFIG);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
+  
+  // Splash Screen State
+  const [showSplash, setShowSplash] = useState(true);
 
   // Auth State
   const [user, setUser] = useState<User | null>(null);
@@ -94,6 +97,15 @@ export default function App() {
   const logoInputRef = useRef<HTMLInputElement>(null);
 
   // --- EFFECTS ---
+  
+  // Splash Screen Effect
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowSplash(false);
+    }, 1500); // 1.5 giây để load
+    return () => clearTimeout(timer);
+  }, []);
+
   useEffect(() => {
     const initData = async () => {
       let activeConfig = { ...config };
@@ -558,11 +570,40 @@ export default function App() {
   const textThemeStyle = { color: systemConfig.themeColor };
   const buttonStyle = { backgroundColor: systemConfig.themeColor };
 
+  // 1. RENDER SPLASH SCREEN
+  if (showSplash) {
+    return (
+      <div className="fixed inset-0 z-[100] bg-emerald-50 flex flex-col items-center justify-center animate-out fade-out duration-700 fill-mode-forwards">
+         <div className="relative mb-6">
+            {/* Ripple Effects */}
+            <div className="absolute inset-0 bg-emerald-500 rounded-full animate-ping opacity-20 delay-100 duration-1000"></div>
+            <div className="absolute inset-0 bg-emerald-400 rounded-full animate-ping opacity-20 delay-300 duration-1000"></div>
+            
+            {/* Logo Container */}
+            <div className="relative w-36 h-36 bg-white rounded-full shadow-2xl p-4 flex items-center justify-center animate-bounce">
+              <img 
+                  src={systemConfig.logoUrl || "/logo302.svg"} 
+                  className="w-full h-full object-contain" 
+                  alt="Logo" 
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = FALLBACK_LOGO_SRC;
+                  }} 
+                />
+            </div>
+         </div>
+         <div className="flex flex-col items-center gap-2">
+            <h1 className="text-2xl font-bold uppercase tracking-widest text-emerald-700 animate-pulse">{systemConfig.appName}</h1>
+            <Loader2 className="w-6 h-6 text-emerald-500 animate-spin" />
+         </div>
+      </div>
+    );
+  }
+
   if (!user) {
     // ... Login UI
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col justify-center px-6">
-        <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full mx-auto animate-in fade-in zoom-in duration-300">
+      <div className="min-h-screen bg-slate-50 flex flex-col justify-center px-6 animate-in zoom-in duration-500 ease-out">
+        <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full mx-auto">
           <div className="flex justify-center mb-6">
             <div className="w-24 h-24 rounded-full flex items-center justify-center border-4 border-white shadow-md overflow-hidden bg-white p-2">
               {/* Logo from Config or Fallback */}
@@ -854,7 +895,7 @@ export default function App() {
                         <div className="flex justify-between items-start mb-2">
                           <div>
                              <p className="font-bold text-slate-800 text-sm">{pendingUser.displayName}</p>
-                             <p className="text-xs text-slate-500">{pendingUser.username} • {pendingUser.unit.split('/').pop()}</p>
+                             <p className="text-xs text-slate-500">{pendingUser.username} • {pendingUser.unit.split('/').pop()?.replace('Bo_chi_huy', 'Quan_tri_vien')}</p>
                           </div>
                           <span className="bg-orange-200 text-orange-800 text-[10px] px-2 py-0.5 rounded-full font-bold">Pending</span>
                         </div>
@@ -984,7 +1025,7 @@ export default function App() {
                      <div key={u.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
                        <div className="overflow-hidden mr-2">
                          <p className="font-bold text-sm text-slate-800 truncate">{u.displayName}</p>
-                         <p className="text-xs text-slate-500 truncate">{u.unit.split('/').slice(-2).join('/')} • {u.username}</p>
+                         <p className="text-xs text-slate-500 truncate">{u.unit.split('/').slice(-2).join('/').replace('Bo_chi_huy', 'Quan_tri_vien')} • {u.username}</p>
                        </div>
                        <div className="flex gap-1 flex-shrink-0">
                           <button onClick={() => startEditUser(u)} className="p-2 text-blue-500 bg-white rounded shadow-sm hover:bg-blue-50"><Edit className="w-4 h-4" /></button>
