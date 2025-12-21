@@ -521,8 +521,7 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
         const rootPath = config.targetFolder;
 
         // Sử dụng Search API để tìm tất cả items
-        // q='' : tìm mọi thứ (hoặc q='.' để tìm item có extension)
-        // select: lấy các trường cần thiết, đặc biệt là parentReference để biết nó nằm ở folder nào
+        // q='.' là thủ thuật để tìm tất cả file có extension
         const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='.')?select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference&expand=thumbnails&top=500`;
 
         const response = await fetch(endpoint, {
@@ -533,30 +532,35 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
         if (!response.ok) throw new Error("Lỗi tìm kiếm file");
 
         const data = await response.json();
-        
-        // Danh sách thư mục cần ẩn đối với User thường
-        const HIDDEN_FOLDERS = ['system', 'bo_chi_huy', 'quan_tri_vien'];
-
         const results: CloudItem[] = [];
 
         if (data.value) {
             for (const item of data.value) {
-                // 1. Chỉ lấy File (có thuộc tính file)
+                // 1. Chỉ lấy Item là File (có thuộc tính file)
                 if (!item.file) continue;
 
-                // 2. Chỉ lấy Ảnh hoặc Video
+                // 2. Logic xác định Ảnh/Video:
+                // Nhiều khi search API trả về mimeType rỗng, nên ta check cả đuôi file
+                const name = item.name.toLowerCase();
                 const mime = item.file.mimeType || '';
-                if (!mime.startsWith('image/') && !mime.startsWith('video/')) continue;
+
+                const isImage = mime.startsWith('image/') || /\.(jpg|jpeg|png|gif|bmp|webp|heic)$/i.test(name);
+                const isVideo = mime.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/i.test(name);
+
+                if (!isImage && !isVideo) continue;
 
                 // 3. Kiểm tra bảo mật (nếu không phải Admin)
+                // Lọc bỏ System, Bo_chi_huy, Quan_tri_vien
                 if (user.role !== 'admin') {
                     const parentPath = item.parentReference?.path || '';
                     // parentPath có dạng: /drive/root:/SnapSync302/System/...
-                    // Decode URI để xử lý tiếng Việt nếu cần
                     const decodedPath = decodeURIComponent(parentPath).toLowerCase();
                     
-                    const isRestricted = HIDDEN_FOLDERS.some(hidden => decodedPath.includes(`/${hidden}`));
-                    if (isRestricted) continue;
+                    if (decodedPath.includes('/system') || 
+                        decodedPath.includes('/bo_chi_huy') || 
+                        decodedPath.includes('/quan_tri_vien')) {
+                        continue;
+                    }
                 }
 
                 // Map dữ liệu
@@ -568,7 +572,7 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
                 results.push({
                     id: item.id,
                     name: item.name,
-                    file: item.file,
+                    file: item.file, // Giữ nguyên object file để component Album xử lý
                     webUrl: item.webUrl,
                     lastModifiedDateTime: item.lastModifiedDateTime,
                     size: item.size,
