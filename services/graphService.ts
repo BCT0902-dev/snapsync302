@@ -273,19 +273,30 @@ export const uploadToOneDrive = async (
     
     const fullPath = `${config.targetFolder}/${unitFolder}/${userFolder}/${monthFolder}`;
     
-    // --- LOGIC ĐỔI TÊN FILE "GỌN GÀNG, LOGIC" ---
-    let prefix = 'FILE';
-    if (file.type.startsWith('image/')) prefix = 'IMG';
-    else if (file.type.startsWith('video/')) prefix = 'VID';
-    else if (file.type.includes('pdf') || file.type.includes('word') || file.type.includes('sheet')) prefix = 'DOC';
-
-    const parts = file.name.split('.');
-    const ext = parts.length > 1 ? parts.pop() : ''; 
-    const pad = (n: number) => n.toString().padStart(2, '0');
-    const pad3 = (n: number) => n.toString().padStart(3, '0');
-    const timeStr = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}_${pad3(now.getMilliseconds())}`;
+    // --- LOGIC ĐỔI TÊN FILE "CHUYÊN NGHIỆP" ---
+    // Format: [Username]_[Tên_Gốc_Sanitized]_[Timestamp].[Ext]
     
-    const cleanFileName = `${prefix}_${timeStr}${ext ? '.' + ext : ''}`;
+    // 1. Tách đuôi file
+    const parts = file.name.split('.');
+    const ext = parts.length > 1 ? parts.pop() : '';
+    const nameWithoutExt = parts.join('.');
+    
+    // 2. Xử lý tên gốc: Bỏ dấu tiếng Việt, thay khoảng trắng/ký tự lạ bằng "_"
+    const noAccent = nameWithoutExt.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const safeName = noAccent
+      .replace(/đ/g, "d").replace(/Đ/g, "D")
+      .replace(/[^a-zA-Z0-9-_]/g, "_")
+      .replace(/_+/g, "_"); // Gộp nhiều dấu gạch dưới
+
+    // Giới hạn độ dài tên gốc (50 ký tự) để tránh đường dẫn quá dài
+    const shortName = safeName.length > 50 ? safeName.substring(0, 50) : safeName;
+
+    // 3. Tạo timestamp ngắn gọn
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const timeStr = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    
+    // 4. Ghép chuỗi
+    const cleanFileName = `${user.username}_${shortName}_${timeStr}${ext ? '.' + ext : ''}`;
 
     // === KIỂM TRA DUNG LƯỢNG FILE ===
     const MAX_SIMPLE_UPLOAD_SIZE = 4 * 1024 * 1024; // 4MB
