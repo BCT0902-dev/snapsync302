@@ -20,7 +20,7 @@ import {
   BarChart3, Grid
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.01";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
@@ -461,7 +461,11 @@ export default function App() {
      if(!user) return;
      setIsGalleryLoading(true);
      setIsViewingAll(true);
-     setGalleryBreadcrumbs([{name: 'Tất cả ảnh/video', path: 'ALL_MEDIA_SPECIAL_KEY'}]); // Special Breadcrumb
+     // Cập nhật Breadcrumb: Home > Tất cả
+     setGalleryBreadcrumbs([
+         {name: 'Thư viện', path: ''}, 
+         {name: 'Tất cả ảnh/video', path: 'ALL_MEDIA_SPECIAL_KEY'}
+     ]);
      try {
          const items = await fetchAllMedia(config, user);
          // Sort by Date Descending (Newest first)
@@ -492,30 +496,21 @@ export default function App() {
   };
 
   const handleBreadcrumbClick = (index: number) => {
-      // If user clicks "Tất cả ảnh/video" (which is index 0 in that mode), do nothing or reload
-      if (isViewingAll && index === 0) return;
+      const targetCrumb = galleryBreadcrumbs[index];
 
-      // If user clicks Home (index 0) while in View All mode or normal mode
-      if (isViewingAll && index < 0) { // Safety check, unlikely
-          setIsViewingAll(false);
-          loadGalleryPath("");
-          setGalleryBreadcrumbs([{name: 'Thư viện', path: ''}]);
-          return;
-      }
-      
-      // If returning to Home from View All
+      // Nếu đang ở chế độ xem tất cả
       if (isViewingAll) {
-          // Reset
+          // Nếu click vào chính mục "Tất cả ảnh/video" -> không làm gì
+          if (targetCrumb.path === 'ALL_MEDIA_SPECIAL_KEY') return;
+          
+          // Nếu click vào Home hoặc mục khác -> Thoát chế độ View All và quay về mục đó
           setIsViewingAll(false);
-          loadGalleryPath("");
-          setGalleryBreadcrumbs([{name: 'Thư viện', path: ''}]);
-          return;
       }
 
       const newBreadcrumbs = galleryBreadcrumbs.slice(0, index + 1);
       setGalleryBreadcrumbs(newBreadcrumbs);
       
-      const newPathString = newBreadcrumbs.map(b => b.path).filter(p => p).join('/');
+      const newPathString = newBreadcrumbs.map(b => b.path).filter(p => p && p !== 'ALL_MEDIA_SPECIAL_KEY').join('/');
       loadGalleryPath(newPathString);
   };
 
@@ -871,7 +866,7 @@ export default function App() {
                       <p className="text-sm font-medium text-slate-800 truncate">{photo.fileName}</p>
                       <div className="mt-1 flex items-center justify-between">
                          <div className="flex items-center">
-                            {photo.status === UploadStatus.UPLOADING && <span className="text-xs text-blue-600 flex items-center font-medium"><Loader2 className="w-3 h-3 mr-1 animate-spin" /> Đang gửi...</span>}
+                            {photo.status === UploadStatus.UPLOADING && <span className="text-xs text-blue-600 flex items-center font-medium"><Loader2 className="w-3 h-3 mr-1" /> Đang gửi...</span>}
                             {photo.status === UploadStatus.SUCCESS && <span className="text-xs text-green-600 flex items-center font-medium"><CheckCircle className="w-3 h-3 mr-1" /> Đã gửi</span>}
                             {photo.status === UploadStatus.ERROR && <span className="text-xs text-red-500 flex items-center font-medium"><XCircle className="w-3 h-3 mr-1" /> {photo.errorMessage}</span>}
                          </div>
