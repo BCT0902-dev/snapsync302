@@ -69,8 +69,18 @@ export const fetchUsersFromOneDrive = async (config: AppConfig): Promise<User[]>
 
     if (!response.ok) throw new Error("Lỗi tải dữ liệu người dùng");
 
-    const users = await response.json();
-    return Array.isArray(users) ? users : INITIAL_USERS;
+    const cloudUsers = await response.json();
+    const userArray = Array.isArray(cloudUsers) ? cloudUsers : [];
+
+    // MERGE LOGIC:
+    // Kết hợp user từ Cloud và Initial Users. 
+    // Nếu user đã có trên Cloud thì dùng Cloud (để lấy cập nhật password/info).
+    // Nếu chưa có trên Cloud (ví dụ 'thannhan' bị thiếu file) thì lấy từ Initial để đảm bảo đăng nhập được.
+    
+    const cloudUsernames = new Set(userArray.map((u: User) => u.username.toLowerCase()));
+    const missingDefaults = INITIAL_USERS.filter(u => !cloudUsernames.has(u.username.toLowerCase()));
+
+    return [...userArray, ...missingDefaults];
 
   } catch (error) {
     console.warn("Không thể tải users từ cloud, dùng fallback:", error);
