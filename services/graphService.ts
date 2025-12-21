@@ -233,12 +233,16 @@ export const fetchSystemStats = async (config: AppConfig): Promise<Partial<Syste
 export const uploadToOneDrive = async (
   file: File, 
   config: AppConfig,
-  user: User | null
+  user: User | null,
+  onProgress?: (percent: number) => void // Thêm callback progress
 ): Promise<{ success: boolean; url?: string; error?: string }> => {
   
   if (config.simulateMode) {
+    if (onProgress) onProgress(0);
     return new Promise((resolve) => {
+      setTimeout(() => { if (onProgress) onProgress(50); }, 500);
       setTimeout(() => {
+        if (onProgress) onProgress(100);
         resolve({ success: true, url: "https://onedrive.live.com/mock-link/" + file.name });
       }, 1500);
     });
@@ -260,32 +264,26 @@ export const uploadToOneDrive = async (
     const fullPath = `${config.targetFolder}/${unitFolder}/${userFolder}/${monthFolder}`;
     
     // --- LOGIC ĐỔI TÊN FILE "GỌN GÀNG, LOGIC" ---
-    // 1. Xác định Prefix
     let prefix = 'FILE';
     if (file.type.startsWith('image/')) prefix = 'IMG';
     else if (file.type.startsWith('video/')) prefix = 'VID';
     else if (file.type.includes('pdf') || file.type.includes('word') || file.type.includes('sheet')) prefix = 'DOC';
 
-    // 2. Xác định Extension
     const parts = file.name.split('.');
-    const ext = parts.length > 1 ? parts.pop() : ''; // Lấy đuôi file gốc
-    
-    // 3. Format thời gian: YYYYMMDD_HHmmss_SSS
+    const ext = parts.length > 1 ? parts.pop() : ''; 
     const pad = (n: number) => n.toString().padStart(2, '0');
     const pad3 = (n: number) => n.toString().padStart(3, '0');
-    
     const timeStr = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}_${pad3(now.getMilliseconds())}`;
     
     const cleanFileName = `${prefix}_${timeStr}${ext ? '.' + ext : ''}`;
-    // ---------------------------------------------
 
     // === KIỂM TRA DUNG LƯỢNG FILE ===
-    // Microsoft Graph giới hạn Simple Upload < 4MB.
-    // Nếu file >= 4MB, phải dùng Create Upload Session.
     const MAX_SIMPLE_UPLOAD_SIZE = 4 * 1024 * 1024; // 4MB
 
     if (file.size < MAX_SIMPLE_UPLOAD_SIZE) {
         // --- CÁCH 1: SIMPLE UPLOAD (Cho file nhỏ) ---
+        if (onProgress) onProgress(10); // Start fake progress
+
         const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${fullPath}/${cleanFileName}:/content`;
 
         const response = await fetch(endpoint, {
@@ -297,6 +295,8 @@ export const uploadToOneDrive = async (
             body: file,
         });
 
+        if (onProgress) onProgress(100); // Done
+
         if (!response.ok) {
             const errorData = await response.json();
             throw new Error(errorData.error?.message || response.statusText);
@@ -307,6 +307,8 @@ export const uploadToOneDrive = async (
 
     } else {
         // --- CÁCH 2: RESUMABLE UPLOAD (Cho file lớn - Video) ---
+        if (onProgress) onProgress(1); // Start
+
         // Bước 1: Tạo Upload Session
         const sessionEndpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${fullPath}/${cleanFileName}:/createUploadSession`;
         
@@ -333,18 +335,14 @@ export const uploadToOneDrive = async (
         const uploadUrl = sessionData.uploadUrl;
 
         // Bước 2: Cắt file và gửi từng phần (Chunking)
-        // Chunk size phải là bội số của 327,680 bytes (320 KB). 
-        // Chọn khoảng 3.2MB cho mỗi chunk để cân bằng tốc độ và độ ổn định.
-        const CHUNK_SIZE = 327680 * 10; // ~3.2 MB
+        // Chunk size: 320 KB * 10 = 3.2 MB
+        const CHUNK_SIZE = 327680 * 10; 
         let start = 0;
         let finalResponseData = null;
 
         while (start < file.size) {
             const end = Math.min(start + CHUNK_SIZE, file.size);
             const slice = file.slice(start, end);
-            
-            // Header Content-Range: bytes start-end/total
-            // Lưu ý: end index là inclusive trong header range (end - 1)
             const rangeHeader = `bytes ${start}-${end - 1}/${file.size}`;
 
             const chunkResponse = await fetch(uploadUrl, {
@@ -360,7 +358,12 @@ export const uploadToOneDrive = async (
                 throw new Error(`Lỗi upload đoạn ${rangeHeader}`);
             }
 
-            // Nếu chunk cuối cùng thành công, nó sẽ trả về thông tin file (status 201 hoặc 200)
+            // Tính % tiến trình và gọi callback
+            if (onProgress) {
+                const percent = Math.round((end / file.size) * 100);
+                onProgress(percent);
+            }
+
             if (chunkResponse.status === 201 || chunkResponse.status === 200) {
                 finalResponseData = await chunkResponse.json();
             }
@@ -371,7 +374,6 @@ export const uploadToOneDrive = async (
         if (finalResponseData) {
              return { success: true, url: finalResponseData.webUrl };
         } else {
-             // Fallback nếu không bắt được response cuối
              return { success: true, url: 'Upload completed' };
         }
     }

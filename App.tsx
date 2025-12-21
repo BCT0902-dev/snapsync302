@@ -402,6 +402,7 @@ export default function App() {
       previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : '',
       status: UploadStatus.UPLOADING,
       timestamp: new Date(),
+      progress: 0 // Initialize progress
     }));
 
     setPhotos(prev => [...newRecords, ...prev]);
@@ -409,14 +410,21 @@ export default function App() {
     for (const record of newRecords) {
       if (!record.file) continue;
       try {
-        const result = await uploadToOneDrive(record.file, config, user);
+        const result = await uploadToOneDrive(record.file, config, user, (progress) => {
+            // Update progress state
+            setPhotos(prev => prev.map(p => 
+                p.id === record.id ? { ...p, progress } : p
+            ));
+        });
+
         setPhotos(prev => prev.map(p => {
           if (p.id === record.id) {
             return {
               ...p,
               status: result.success ? UploadStatus.SUCCESS : UploadStatus.ERROR,
               uploadedUrl: result.url,
-              errorMessage: result.error
+              errorMessage: result.error,
+              progress: 100 // Ensure 100% on completion
             };
           }
           return p;
@@ -427,7 +435,8 @@ export default function App() {
             return {
               ...p,
               status: UploadStatus.ERROR,
-              errorMessage: error.message || "Lỗi không xác định"
+              errorMessage: error.message || "Lỗi không xác định",
+              progress: 0
             };
           }
           return p;
@@ -944,7 +953,7 @@ export default function App() {
             ) : (
               <div className="space-y-3">
                 {getWeeklyPhotos().slice(0, 5).map((photo) => (
-                  <div key={photo.id} className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center">
+                  <div key={photo.id} className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center flex-wrap">
                     <PhotoPreview record={photo} />
                     <div className="ml-4 flex-1 min-w-0">
                       <p className="text-sm font-medium text-slate-800 truncate">{photo.fileName}</p>
@@ -956,6 +965,16 @@ export default function App() {
                          </div>
                          <span className="text-[10px] text-slate-400">{photo.timestamp.toLocaleDateString('vi-VN')}</span>
                       </div>
+                      
+                      {/* Progress Bar for Uploading Files */}
+                      {photo.status === UploadStatus.UPLOADING && photo.progress !== undefined && (
+                        <div className="w-full bg-slate-100 rounded-full h-1.5 mt-2 overflow-hidden">
+                            <div 
+                                className="bg-emerald-500 h-1.5 rounded-full transition-all duration-300 ease-out" 
+                                style={{ width: `${photo.progress}%` }}
+                            ></div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}

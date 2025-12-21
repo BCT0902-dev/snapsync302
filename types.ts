@@ -27,6 +27,7 @@ export interface PhotoRecord {
   errorMessage?: string;
   size?: number;
   mimeType?: string; // Thêm mimeType để nhận biết video/ảnh
+  progress?: number; // % Tiến trình upload (0-100)
 }
 
 export interface AppConfig {
