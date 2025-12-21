@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { User, PhotoRecord, UploadStatus, AppConfig, SystemConfig, CloudItem, SystemStats } from './types';
 import { INITIAL_USERS, login } from './services/mockAuth';
@@ -5,7 +6,7 @@ import {
   uploadToOneDrive, fetchUsersFromOneDrive, saveUsersToOneDrive, 
   listUserMonthFolders, listFilesInMonthFolder, createShareLink,
   fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles,
-  getAccessToken, listPathContents, fetchSystemStats
+  getAccessToken, listPathContents, fetchSystemStats, fetchAllMedia
 } from './services/graphService';
 import { Button } from './components/Button';
 import { Album } from './components/Album';
@@ -16,7 +17,7 @@ import {
   FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
-  BarChart3
+  BarChart3, Grid
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -102,6 +103,7 @@ export default function App() {
   const [galleryBreadcrumbs, setGalleryBreadcrumbs] = useState<{name: string, path: string}[]>([{name: 'Toàn đơn vị', path: ''}]);
   const [galleryItems, setGalleryItems] = useState<CloudItem[]>([]);
   const [isGalleryLoading, setIsGalleryLoading] = useState(false);
+  const [isViewingAll, setIsViewingAll] = useState(false); // New state to track "View All" mode
 
   // Share View State (Legacy - keeping for fallback but prioritizing Gallery)
   const [sharingItem, setSharingItem] = useState<string | null>(null); 
@@ -164,6 +166,7 @@ export default function App() {
   useEffect(() => {
     if (currentView === 'gallery' && user) {
         // Luôn load root khi vào gallery
+        setIsViewingAll(false);
         loadGalleryPath("");
         setGalleryBreadcrumbs([{name: 'Thư viện', path: ''}]);
     }
@@ -343,8 +346,8 @@ export default function App() {
     setIsSavingUser(true);
     try {
        const newList = usersList.map(u => u.id === userToApprove.id ? { ...u, status: 'active' } as User : u);
-       const success = await saveUsersToOneDrive(newList, config);
-       if(success) {
+       const saveSuccess = await saveUsersToOneDrive(newList, config);
+       if(saveSuccess) {
          setUsersList(newList);
        } else {
          alert("Lỗi lưu dữ liệu.");
@@ -453,13 +456,32 @@ export default function App() {
     }
   };
 
+  // New function to handle "View All"
+  const handleViewAll = async () => {
+     if(!user) return;
+     setIsGalleryLoading(true);
+     setIsViewingAll(true);
+     setGalleryBreadcrumbs([{name: 'Tất cả ảnh/video', path: 'ALL_MEDIA_SPECIAL_KEY'}]); // Special Breadcrumb
+     try {
+         const items = await fetchAllMedia(config, user);
+         // Sort by Date Descending (Newest first)
+         const sorted = items.sort((a,b) => new Date(b.lastModifiedDateTime).getTime() - new Date(a.lastModifiedDateTime).getTime());
+         setGalleryItems(sorted);
+     } catch(e) {
+         console.error(e);
+         setGalleryItems([]);
+     } finally {
+         setIsGalleryLoading(false);
+     }
+  };
+
   const handleGalleryClick = (item: CloudItem) => {
     if (item.folder) {
         // Là thư mục -> đi sâu vào
         const newBreadcrumb = { name: item.name, path: item.name };
         
         // Tính toán full relative path
-        const currentPathString = galleryBreadcrumbs.map(b => b.path).filter(p => p).join('/');
+        const currentPathString = galleryBreadcrumbs.map(b => b.path).filter(p => p && p !== 'ALL_MEDIA_SPECIAL_KEY').join('/');
         const newPathString = currentPathString ? `${currentPathString}/${item.name}` : item.name;
 
         // Cập nhật breadcrumbs với path ĐẦY ĐỦ thực tế để dễ query
@@ -470,6 +492,26 @@ export default function App() {
   };
 
   const handleBreadcrumbClick = (index: number) => {
+      // If user clicks "Tất cả ảnh/video" (which is index 0 in that mode), do nothing or reload
+      if (isViewingAll && index === 0) return;
+
+      // If user clicks Home (index 0) while in View All mode or normal mode
+      if (isViewingAll && index < 0) { // Safety check, unlikely
+          setIsViewingAll(false);
+          loadGalleryPath("");
+          setGalleryBreadcrumbs([{name: 'Thư viện', path: ''}]);
+          return;
+      }
+      
+      // If returning to Home from View All
+      if (isViewingAll) {
+          // Reset
+          setIsViewingAll(false);
+          loadGalleryPath("");
+          setGalleryBreadcrumbs([{name: 'Thư viện', path: ''}]);
+          return;
+      }
+
       const newBreadcrumbs = galleryBreadcrumbs.slice(0, index + 1);
       setGalleryBreadcrumbs(newBreadcrumbs);
       
@@ -876,10 +918,30 @@ export default function App() {
         {/* --- GALLERY VIEW START --- */}
         {currentView === 'gallery' && (
           <div className="space-y-4 h-full flex flex-col">
-            <h3 className="font-bold text-slate-800 text-lg flex items-center flex-shrink-0">
-              <Library className="w-5 h-5 mr-2" style={textThemeStyle} />
-              Thư viện chung
-            </h3>
+            <div className="flex justify-between items-center flex-shrink-0">
+                <h3 className="font-bold text-slate-800 text-lg flex items-center">
+                  <Library className="w-5 h-5 mr-2" style={textThemeStyle} />
+                  Thư viện chung
+                </h3>
+                {!isViewingAll && (
+                    <button 
+                        onClick={handleViewAll}
+                        className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-md font-bold flex items-center"
+                    >
+                        <Grid className="w-3 h-3 mr-1" />
+                        Xem tất cả
+                    </button>
+                )}
+                {isViewingAll && (
+                    <button 
+                        onClick={() => handleBreadcrumbClick(0)}
+                        className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-md font-bold flex items-center"
+                    >
+                        <Folder className="w-3 h-3 mr-1" />
+                        Theo thư mục
+                    </button>
+                )}
+            </div>
             
             {/* Breadcrumbs */}
             <div className="flex items-center space-x-1 text-sm overflow-x-auto pb-2 flex-shrink-0 scrollbar-hide">
@@ -909,7 +971,7 @@ export default function App() {
                    </div>
                ) : (
                    <div className="space-y-4">
-                       {/* 1. Folder List (Nếu có) */}
+                       {/* 1. Folder List (Nếu có và không ở chế độ Xem tất cả) */}
                        {galleryItems.filter(i => i.folder).length > 0 && (
                            <div className="space-y-2">
                                {galleryItems.filter(i => i.folder).map(item => (

@@ -504,3 +504,84 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
     return [];
   }
 };
+
+/**
+ * GALLERY: Lấy TOÀN BỘ file ảnh/video trong hệ thống (Flatten)
+ * Có lọc bỏ thư mục nhạy cảm nếu không phải Admin
+ */
+export const fetchAllMedia = async (config: AppConfig, user: User): Promise<CloudItem[]> => {
+    if (config.simulateMode) {
+        return [
+            { id: '1', name: 'demo.jpg', file: {mimeType: 'image/jpeg'}, webUrl: '#', lastModifiedDateTime: new Date().toISOString(), size: 1024, thumbnailUrl: 'https://via.placeholder.com/150' } as CloudItem
+        ];
+    }
+
+    try {
+        const token = await getAccessToken();
+        const rootPath = config.targetFolder;
+
+        // Sử dụng Search API để tìm tất cả items
+        // q='' : tìm mọi thứ (hoặc q='.' để tìm item có extension)
+        // select: lấy các trường cần thiết, đặc biệt là parentReference để biết nó nằm ở folder nào
+        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='.')?select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference&expand=thumbnails&top=500`;
+
+        const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!response.ok) throw new Error("Lỗi tìm kiếm file");
+
+        const data = await response.json();
+        
+        // Danh sách thư mục cần ẩn đối với User thường
+        const HIDDEN_FOLDERS = ['system', 'bo_chi_huy', 'quan_tri_vien'];
+
+        const results: CloudItem[] = [];
+
+        if (data.value) {
+            for (const item of data.value) {
+                // 1. Chỉ lấy File (có thuộc tính file)
+                if (!item.file) continue;
+
+                // 2. Chỉ lấy Ảnh hoặc Video
+                const mime = item.file.mimeType || '';
+                if (!mime.startsWith('image/') && !mime.startsWith('video/')) continue;
+
+                // 3. Kiểm tra bảo mật (nếu không phải Admin)
+                if (user.role !== 'admin') {
+                    const parentPath = item.parentReference?.path || '';
+                    // parentPath có dạng: /drive/root:/SnapSync302/System/...
+                    // Decode URI để xử lý tiếng Việt nếu cần
+                    const decodedPath = decodeURIComponent(parentPath).toLowerCase();
+                    
+                    const isRestricted = HIDDEN_FOLDERS.some(hidden => decodedPath.includes(`/${hidden}`));
+                    if (isRestricted) continue;
+                }
+
+                // Map dữ liệu
+                let thumb = "";
+                if (item.thumbnails && item.thumbnails.length > 0) {
+                    thumb = item.thumbnails[0].large?.url || item.thumbnails[0].medium?.url || item.thumbnails[0].small?.url;
+                }
+
+                results.push({
+                    id: item.id,
+                    name: item.name,
+                    file: item.file,
+                    webUrl: item.webUrl,
+                    lastModifiedDateTime: item.lastModifiedDateTime,
+                    size: item.size,
+                    thumbnailUrl: thumb,
+                    downloadUrl: item['@microsoft.graph.downloadUrl']
+                });
+            }
+        }
+
+        return results;
+
+    } catch (error) {
+        console.error("Fetch All Media Error:", error);
+        return [];
+    }
+};
