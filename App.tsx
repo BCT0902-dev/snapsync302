@@ -6,7 +6,7 @@ import {
   uploadToOneDrive, fetchUsersFromOneDrive, saveUsersToOneDrive, 
   listUserMonthFolders, listFilesInMonthFolder, createShareLink,
   fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles,
-  getAccessToken, listPathContents, fetchSystemStats, fetchAllMedia
+  getAccessToken, listPathContents, fetchSystemStats, fetchAllMedia, deleteFileFromOneDrive
 } from './services/graphService';
 import { Button } from './components/Button';
 import { Album } from './components/Album';
@@ -113,6 +113,10 @@ export default function App() {
   const multiFileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
+
+  // --- HELPER CONSTANT FOR GUEST ---
+  // Kiểm tra nếu là user thannhan thì coi là guest
+  const isGuest = user?.username === 'thannhan';
 
   // --- EFFECTS ---
   
@@ -233,10 +237,16 @@ export default function App() {
           setLoginError('Tài khoản đang chờ phê duyệt!');
         } else {
           setUser(loggedUser);
-          setCurrentView('camera');
-          setShowDisclaimer(true);
-          // Tải lại lịch sử file ngay khi login
-          loadRecentPhotos(loggedUser);
+          // Nếu là thannhan (guest) thì vào thẳng gallery
+          if (loggedUser.username === 'thannhan') {
+             setCurrentView('gallery');
+             setShowDisclaimer(false); // Guest có thể bỏ qua hoặc giữ tùy ý, ở đây mình tắt cho gọn
+          } else {
+             setCurrentView('camera');
+             setShowDisclaimer(true);
+             // Tải lại lịch sử file ngay khi login
+             loadRecentPhotos(loggedUser);
+          }
         }
       } else {
         setLoginError('Tài khoản hoặc mật khẩu không đúng.');
@@ -434,7 +444,7 @@ export default function App() {
     try {
         const items = await listPathContents(config, path);
         
-        // Lọc thư mục nhạy cảm đối với user thường
+        // Lọc thư mục nhạy cảm đối với user thường và guest
         let displayItems = items;
         if (user.role !== 'admin') {
             // Danh sách các folder cần ẩn
@@ -586,6 +596,22 @@ export default function App() {
     } finally {
         setDownloadingFolderId(null);
     }
+  };
+
+  const handleDeleteGalleryItem = async (item: CloudItem) => {
+     if(!user) return;
+     try {
+         const success = await deleteFileFromOneDrive(config, item.id);
+         if (success) {
+             alert(`Đã xóa ${item.name}`);
+             // Cập nhật UI: Loại bỏ item đã xóa khỏi danh sách hiện tại
+             setGalleryItems(prev => prev.filter(i => i.id !== item.id));
+         } else {
+             alert("Không thể xóa file. Vui lòng thử lại.");
+         }
+     } catch (e) {
+         alert("Lỗi hệ thống khi xóa file.");
+     }
   };
 
 
@@ -870,7 +896,7 @@ export default function App() {
           // @ts-ignore
           webkitdirectory="" directory="" ref={folderInputRef} onChange={handleFileSelection} className="hidden" />
           
-        {currentView === 'camera' && (
+        {currentView === 'camera' && !isGuest && (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
               <h3 className="text-lg font-bold mb-2" style={textThemeStyle}>Upload Tài liệu/Đa phương tiện</h3>
@@ -938,7 +964,7 @@ export default function App() {
           </div>
         )}
 
-        {currentView === 'history' && (
+        {currentView === 'history' && !isGuest && (
           <div className="space-y-4">
              <h3 className="font-bold text-slate-800 text-lg mb-4">Lịch sử gửi file (Tháng này)</h3>
              {isHistoryLoading ? (
@@ -1073,7 +1099,12 @@ export default function App() {
                                        <ImageIcon className="w-4 h-4" /> Hình ảnh / Video
                                    </div>
                                )}
-                               <Album items={galleryItems.filter(i => i.file)} color={systemConfig.themeColor} />
+                               <Album 
+                                  items={galleryItems.filter(i => i.file)} 
+                                  color={systemConfig.themeColor}
+                                  isAdmin={user.role === 'admin'}
+                                  onDelete={handleDeleteGalleryItem}
+                               />
                            </div>
                        )}
                    </div>
@@ -1083,7 +1114,7 @@ export default function App() {
         )}
         {/* --- GALLERY VIEW END --- */}
 
-        {currentView === 'settings' && user.role === 'admin' && (
+        {currentView === 'settings' && user.role === 'admin' && !isGuest && (
           <div className="space-y-6">
             <h3 className="font-bold text-slate-800 text-xl flex items-center">
               <Settings className="w-6 h-6 mr-2" style={textThemeStyle} />
@@ -1261,10 +1292,14 @@ export default function App() {
 
       {/* FOOTER NAV: Bỏ absolute để trở thành 1 phần tử flex-none ở cuối cột, đảm bảo luôn nằm dưới cùng màn hình */}
       <nav className="bg-white border-t border-slate-200 flex justify-around items-center py-2 pb-safe flex-none shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-30">
-        <TabButton active={currentView === 'camera'} onClick={() => setCurrentView('camera')} icon={<Camera />} label="Upload" color={systemConfig.themeColor} />
+        {!isGuest && (
+            <TabButton active={currentView === 'camera'} onClick={() => setCurrentView('camera')} icon={<Camera />} label="Upload" color={systemConfig.themeColor} />
+        )}
         <TabButton active={currentView === 'gallery'} onClick={() => setCurrentView('gallery')} icon={<Library />} label="Thư viện" color={systemConfig.themeColor} />
-        <TabButton active={currentView === 'history'} onClick={() => setCurrentView('history')} icon={<History />} label="Lịch sử" color={systemConfig.themeColor} />
-        {user.role === 'admin' && (
+        {!isGuest && (
+            <TabButton active={currentView === 'history'} onClick={() => setCurrentView('history')} icon={<History />} label="Lịch sử" color={systemConfig.themeColor} />
+        )}
+        {user.role === 'admin' && !isGuest && (
           <TabButton active={currentView === 'settings'} onClick={() => setCurrentView('settings')} icon={<Settings />} label="Quản trị" color={systemConfig.themeColor} />
         )}
       </nav>

@@ -308,6 +308,32 @@ export const uploadToOneDrive = async (
 };
 
 /**
+ * ADMIN: Xóa file khỏi OneDrive
+ */
+export const deleteFileFromOneDrive = async (config: AppConfig, itemId: string): Promise<boolean> => {
+  if (config.simulateMode) return true;
+
+  try {
+    const token = await getAccessToken();
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}`;
+
+    const response = await fetch(endpoint, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+
+    if (!response.ok && response.status !== 204) {
+      const data = await response.json();
+      throw new Error(data.error?.message || "Lỗi xóa file");
+    }
+    return true;
+  } catch (error) {
+    console.error("Delete Error:", error);
+    return false;
+  }
+};
+
+/**
  * HISTORY: Lấy danh sách file kèm thumbnails
  */
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {

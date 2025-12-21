@@ -1,17 +1,20 @@
 
 import React, { useState } from 'react';
 import { CloudItem } from '../types';
-import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle } from 'lucide-react';
+import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle, Trash2 } from 'lucide-react';
 
 interface AlbumProps {
   items: CloudItem[];
   color: string;
+  isAdmin?: boolean;
+  onDelete?: (item: CloudItem) => void;
 }
 
-export const Album: React.FC<AlbumProps> = ({ items, color }) => {
+export const Album: React.FC<AlbumProps> = ({ items, color, isAdmin = false, onDelete }) => {
   const [selectedItem, setSelectedItem] = useState<CloudItem | null>(null);
   const [isImgLoading, setIsImgLoading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Lọc chỉ hiển thị ảnh và video trong grid
   const mediaItems = items.filter(i => i.file);
@@ -20,12 +23,14 @@ export const Album: React.FC<AlbumProps> = ({ items, color }) => {
     setSelectedItem(item);
     setIsImgLoading(true); // Reset trạng thái loading khi mở ảnh mới
     setIsDownloading(false);
+    setIsDeleting(false);
   };
 
   const handleClose = () => {
     setSelectedItem(null);
     setIsImgLoading(false);
     setIsDownloading(false);
+    setIsDeleting(false);
   };
 
   const handleNext = (e: React.MouseEvent) => {
@@ -43,6 +48,20 @@ export const Album: React.FC<AlbumProps> = ({ items, color }) => {
     const idx = mediaItems.findIndex(i => i.id === selectedItem.id);
     if (idx > 0) {
         handleOpenItem(mediaItems[idx - 1]);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!selectedItem || !onDelete) return;
+    if (!confirm(`Bạn có chắc chắn muốn xóa "${selectedItem.name}" vĩnh viễn không?`)) return;
+
+    setIsDeleting(true);
+    try {
+        await onDelete(selectedItem);
+        handleClose(); // Đóng modal sau khi xóa
+    } catch (e) {
+        console.error("Delete failed in UI", e);
+        setIsDeleting(false);
     }
   };
 
@@ -144,6 +163,16 @@ export const Album: React.FC<AlbumProps> = ({ items, color }) => {
                   <p className="text-xs text-white/60">{(selectedItem.size / 1024 / 1024).toFixed(2)} MB • {new Date(selectedItem.lastModifiedDateTime).toLocaleDateString()}</p>
               </div>
               <div className="flex gap-4 shrink-0 items-center">
+                  {isAdmin && onDelete && (
+                      <button 
+                        onClick={handleDelete}
+                        disabled={isDeleting}
+                        className="p-2 text-red-400 hover:bg-red-500/20 rounded-full flex items-center justify-center disabled:opacity-50"
+                        title="Xóa ảnh"
+                      >
+                         {isDeleting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Trash2 className="w-5 h-5" />}
+                      </button>
+                  )}
                   <button 
                     onClick={handleDownload} 
                     disabled={isDownloading}

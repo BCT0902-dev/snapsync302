@@ -5,6 +5,9 @@ import { User } from '../types';
 // "cntt@302" encoded in Base64 is "Y250dEAzMDI="
 const ADMIN_SECRET = atob('Y250dEAzMDI=');
 
+// "thannhan302" encoded in Base64 is "dGhhbm5oYW4zMDI="
+const THANNHAN_SECRET = atob('dGhhbm5oYW4zMDI=');
+
 // Danh sách tài khoản mặc định (Fallback khi chưa có file trên Cloud)
 export const INITIAL_USERS: User[] = [
   { 
@@ -25,6 +28,15 @@ export const INITIAL_USERS: User[] = [
     unit: 'Quan_tri_vien',
     status: 'active'
   },
+  {
+    id: 'guest_thannhan',
+    username: 'thannhan',
+    password: THANNHAN_SECRET,
+    role: 'staff', // Dùng role staff nhưng sẽ giới hạn hiển thị trong App.tsx
+    displayName: 'Thân Nhân / Khách',
+    unit: 'Khach_tham_quan',
+    status: 'active'
+  }
 ];
 
 // Hàm login (Validation local)
