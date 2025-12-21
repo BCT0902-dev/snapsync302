@@ -520,66 +520,77 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
         const token = await getAccessToken();
         const rootPath = config.targetFolder;
 
-        // Sử dụng Search API để tìm tất cả items
-        // q='.' là thủ thuật để tìm tất cả file có extension
-        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='.')?select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference&expand=thumbnails&top=500`;
-
-        const response = await fetch(endpoint, {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (!response.ok) throw new Error("Lỗi tìm kiếm file");
-
-        const data = await response.json();
+        // --- CẢI TIẾN: SỬ DỤNG VÒNG LẶP ĐỂ LẤY HẾT KẾT QUẢ (PAGINATION) ---
+        // Sử dụng q='*' để tìm tất cả
+        // top=200 để lấy nhiều item mỗi lần request (Max thường là 200-500)
+        let nextLink = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='*')?select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference&expand=thumbnails&top=200`;
+        
         const results: CloudItem[] = [];
 
-        if (data.value) {
-            for (const item of data.value) {
-                // 1. Chỉ lấy Item là File (có thuộc tính file)
-                if (!item.file) continue;
+        // Vòng lặp tải trang
+        while (nextLink) {
+            const response = await fetch(nextLink, {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
 
-                // 2. Logic xác định Ảnh/Video:
-                // Nhiều khi search API trả về mimeType rỗng, nên ta check cả đuôi file
-                const name = item.name.toLowerCase();
-                const mime = item.file.mimeType || '';
-
-                const isImage = mime.startsWith('image/') || /\.(jpg|jpeg|png|gif|bmp|webp|heic)$/i.test(name);
-                const isVideo = mime.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/i.test(name);
-
-                if (!isImage && !isVideo) continue;
-
-                // 3. Kiểm tra bảo mật (nếu không phải Admin)
-                // Lọc bỏ System, Bo_chi_huy, Quan_tri_vien
-                if (user.role !== 'admin') {
-                    const parentPath = item.parentReference?.path || '';
-                    // parentPath có dạng: /drive/root:/SnapSync302/System/...
-                    const decodedPath = decodeURIComponent(parentPath).toLowerCase();
-                    
-                    if (decodedPath.includes('/system') || 
-                        decodedPath.includes('/bo_chi_huy') || 
-                        decodedPath.includes('/quan_tri_vien')) {
-                        continue;
-                    }
-                }
-
-                // Map dữ liệu
-                let thumb = "";
-                if (item.thumbnails && item.thumbnails.length > 0) {
-                    thumb = item.thumbnails[0].large?.url || item.thumbnails[0].medium?.url || item.thumbnails[0].small?.url;
-                }
-
-                results.push({
-                    id: item.id,
-                    name: item.name,
-                    file: item.file, // Giữ nguyên object file để component Album xử lý
-                    webUrl: item.webUrl,
-                    lastModifiedDateTime: item.lastModifiedDateTime,
-                    size: item.size,
-                    thumbnailUrl: thumb,
-                    downloadUrl: item['@microsoft.graph.downloadUrl']
-                });
+            if (!response.ok) {
+                console.warn("Lỗi tìm kiếm file (Page):", response.statusText);
+                break;
             }
+
+            const data = await response.json();
+            
+            if (data.value) {
+                for (const item of data.value) {
+                    // 1. Chỉ lấy Item là File (có thuộc tính file)
+                    if (!item.file) continue;
+
+                    // 2. Logic xác định Ảnh/Video:
+                    // Nhiều khi search API trả về mimeType rỗng, nên ta check cả đuôi file
+                    const name = item.name.toLowerCase();
+                    const mime = item.file.mimeType || '';
+
+                    const isImage = mime.startsWith('image/') || /\.(jpg|jpeg|png|gif|bmp|webp|heic)$/i.test(name);
+                    const isVideo = mime.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/i.test(name);
+
+                    if (!isImage && !isVideo) continue;
+
+                    // 3. Kiểm tra bảo mật (nếu không phải Admin)
+                    // Lọc bỏ System, Bo_chi_huy, Quan_tri_vien
+                    if (user.role !== 'admin') {
+                        const parentPath = item.parentReference?.path || '';
+                        // parentPath có dạng: /drive/root:/SnapSync302/System/...
+                        const decodedPath = decodeURIComponent(parentPath).toLowerCase();
+                        
+                        if (decodedPath.includes('/system') || 
+                            decodedPath.includes('/bo_chi_huy') || 
+                            decodedPath.includes('/quan_tri_vien')) {
+                            continue;
+                        }
+                    }
+
+                    // Map dữ liệu
+                    let thumb = "";
+                    if (item.thumbnails && item.thumbnails.length > 0) {
+                        thumb = item.thumbnails[0].large?.url || item.thumbnails[0].medium?.url || item.thumbnails[0].small?.url;
+                    }
+
+                    results.push({
+                        id: item.id,
+                        name: item.name,
+                        file: item.file, // Giữ nguyên object file để component Album xử lý
+                        webUrl: item.webUrl,
+                        lastModifiedDateTime: item.lastModifiedDateTime,
+                        size: item.size,
+                        thumbnailUrl: thumb,
+                        downloadUrl: item['@microsoft.graph.downloadUrl']
+                    });
+                }
+            }
+            
+            // Chuyển sang trang tiếp theo nếu có
+            nextLink = data['@odata.nextLink'];
         }
 
         return results;
