@@ -11,6 +11,7 @@ interface AlbumProps {
 export const Album: React.FC<AlbumProps> = ({ items, color }) => {
   const [selectedItem, setSelectedItem] = useState<CloudItem | null>(null);
   const [isImgLoading, setIsImgLoading] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   // Lọc chỉ hiển thị ảnh và video trong grid
   const mediaItems = items.filter(i => i.file);
@@ -18,11 +19,13 @@ export const Album: React.FC<AlbumProps> = ({ items, color }) => {
   const handleOpenItem = (item: CloudItem) => {
     setSelectedItem(item);
     setIsImgLoading(true); // Reset trạng thái loading khi mở ảnh mới
+    setIsDownloading(false);
   };
 
   const handleClose = () => {
     setSelectedItem(null);
     setIsImgLoading(false);
+    setIsDownloading(false);
   };
 
   const handleNext = (e: React.MouseEvent) => {
@@ -40,6 +43,46 @@ export const Album: React.FC<AlbumProps> = ({ items, color }) => {
     const idx = mediaItems.findIndex(i => i.id === selectedItem.id);
     if (idx > 0) {
         handleOpenItem(mediaItems[idx - 1]);
+    }
+  };
+
+  const handleDownload = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!selectedItem) return;
+    
+    // Ưu tiên dùng downloadUrl (link tải trực tiếp), fallback về webUrl
+    const targetUrl = selectedItem.downloadUrl || selectedItem.webUrl;
+    
+    if (!targetUrl) {
+        alert("Không tìm thấy đường dẫn tải file.");
+        return;
+    }
+
+    try {
+        setIsDownloading(true);
+        
+        // Cách 1: Fetch Blob để ép trình duyệt tải về với đúng tên file
+        const response = await fetch(targetUrl);
+        if (!response.ok) throw new Error("Download failed");
+        
+        const blob = await response.blob();
+        const blobUrl = window.URL.createObjectURL(blob);
+        
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = selectedItem.name; // Ép tên file đúng
+        document.body.appendChild(link);
+        link.click();
+        
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+        console.error("Blob download failed, fallback to direct link", error);
+        // Cách 2 (Fallback): Mở trực tiếp link downloadUrl trong tab mới
+        // Link này thường là link Azure trực tiếp, trình duyệt sẽ tự tải xuống mà không vào giao diện OneDrive
+        window.open(targetUrl, '_blank');
+    } finally {
+        setIsDownloading(false);
     }
   };
 
@@ -100,8 +143,15 @@ export const Album: React.FC<AlbumProps> = ({ items, color }) => {
                   <p className="text-sm font-bold truncate">{selectedItem.name}</p>
                   <p className="text-xs text-white/60">{(selectedItem.size / 1024 / 1024).toFixed(2)} MB • {new Date(selectedItem.lastModifiedDateTime).toLocaleDateString()}</p>
               </div>
-              <div className="flex gap-4 shrink-0">
-                  <a href={selectedItem.webUrl} target="_blank" rel="noreferrer" className="p-2 hover:bg-white/20 rounded-full" title="Mở trong OneDrive"><Download className="w-5 h-5" /></a>
+              <div className="flex gap-4 shrink-0 items-center">
+                  <button 
+                    onClick={handleDownload} 
+                    disabled={isDownloading}
+                    className="p-2 hover:bg-white/20 rounded-full flex items-center justify-center disabled:opacity-50" 
+                    title="Tải xuống"
+                  >
+                    {isDownloading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+                  </button>
                   <button onClick={handleClose} className="p-2 hover:bg-white/20 rounded-full"><X className="w-6 h-6" /></button>
               </div>
            </div>
@@ -129,7 +179,13 @@ export const Album: React.FC<AlbumProps> = ({ items, color }) => {
                    <div className="text-white text-center">
                        <FileIcon className="w-16 h-16 mx-auto mb-4 text-white/50" />
                        <p>Không thể xem trước file này.</p>
-                       <a href={selectedItem.webUrl} target="_blank" rel="noreferrer" className="mt-4 inline-block bg-white text-black px-4 py-2 rounded-lg font-bold">Mở trong OneDrive</a>
+                       <button 
+                            onClick={handleDownload}
+                            className="mt-4 inline-flex items-center bg-white text-black px-4 py-2 rounded-lg font-bold hover:bg-slate-200"
+                        >
+                            {isDownloading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                            Tải xuống
+                       </button>
                    </div>
                )}
 
