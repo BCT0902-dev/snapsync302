@@ -504,8 +504,8 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
  */
 const crawlFolderRecursive = async (token: string, folderId: string, results: CloudItem[], user: User) => {
   try {
-    // Lấy danh sách con của folderId
-    let nextLink = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,parentReference&expand=thumbnails&top=200`;
+    // BỎ tham số select=... để đảm bảo lấy tất cả trường (bao gồm @microsoft.graph.downloadUrl)
+    let nextLink = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children?expand=thumbnails&top=200`;
 
     while (nextLink) {
       const response = await fetch(nextLink, {

@@ -1,7 +1,7 @@
+
 import React, { useState } from 'react';
 import { CloudItem } from '../types';
 import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle } from 'lucide-react';
-import { getAccessToken } from '../services/graphService';
 
 interface AlbumProps {
   items: CloudItem[];
@@ -10,56 +10,19 @@ interface AlbumProps {
 
 export const Album: React.FC<AlbumProps> = ({ items, color }) => {
   const [selectedItem, setSelectedItem] = useState<CloudItem | null>(null);
-  const [isLoadingImg, setIsLoadingImg] = useState(false);
-  const [secureSrc, setSecureSrc] = useState<string>("");
+  const [isImgLoading, setIsImgLoading] = useState(false);
 
   // Lọc chỉ hiển thị ảnh và video trong grid
   const mediaItems = items.filter(i => i.file);
 
-  const handleOpenItem = async (item: CloudItem) => {
+  const handleOpenItem = (item: CloudItem) => {
     setSelectedItem(item);
-    setIsLoadingImg(true);
-    
-    // Revoke old blob if exists to free memory
-    if (secureSrc.startsWith('blob:')) URL.revokeObjectURL(secureSrc);
-    setSecureSrc(""); // Reset src
-
-    if (item.file?.mimeType?.startsWith('image/')) {
-        try {
-            // Cố gắng load ảnh chất lượng cao bằng token
-            const token = await getAccessToken();
-            // Sử dụng downloadUrl nếu có (thường là link tạm thời public ngắn hạn hoặc cần auth)
-            // Hoặc dùng endpoint /content
-            const fetchUrl = item.downloadUrl || item.webUrl; // Fallback
-            
-            // Nếu downloadUrl có sẵn, thường nó access được trực tiếp nếu có token hoặc short-lived token
-            // Nhưng để chắc chắn, ta fetch blob
-            const res = await fetch(fetchUrl); 
-            if(res.ok) {
-                const blob = await res.blob();
-                const blobUrl = URL.createObjectURL(blob);
-                setSecureSrc(blobUrl);
-            } else {
-                // Fallback nếu fetch fail
-                setSecureSrc(item.thumbnailUrl || "");
-            }
-        } catch (e) {
-            console.error("Load full image error", e);
-            setSecureSrc(item.thumbnailUrl || "");
-        } finally {
-            setIsLoadingImg(false);
-        }
-    } else {
-        // Video hoặc file khác -> dùng link webUrl hoặc downloadUrl
-        setSecureSrc(item.downloadUrl || item.webUrl);
-        setIsLoadingImg(false);
-    }
+    setIsImgLoading(true); // Reset trạng thái loading khi mở ảnh mới
   };
 
   const handleClose = () => {
     setSelectedItem(null);
-    if (secureSrc.startsWith('blob:')) URL.revokeObjectURL(secureSrc);
-    setSecureSrc("");
+    setIsImgLoading(false);
   };
 
   const handleNext = (e: React.MouseEvent) => {
@@ -78,6 +41,16 @@ export const Album: React.FC<AlbumProps> = ({ items, color }) => {
     if (idx > 0) {
         handleOpenItem(mediaItems[idx - 1]);
     }
+  };
+
+  // Xác định URL hiển thị: Ưu tiên downloadUrl (Full Quality), dự phòng thumbnailUrl
+  const getDisplayUrl = (item: CloudItem) => {
+      if (item.file?.mimeType?.startsWith('video/')) {
+          return item.downloadUrl || item.webUrl;
+      }
+      // Với ảnh: dùng downloadUrl để hiển thị nét nhất. 
+      // Thẻ img tự động xử lý redirect của OneDrive/SharePoint mà không bị lỗi CORS.
+      return item.downloadUrl || item.thumbnailUrl || "";
   };
 
   if (mediaItems.length === 0) {
@@ -128,7 +101,7 @@ export const Album: React.FC<AlbumProps> = ({ items, color }) => {
                   <p className="text-xs text-white/60">{(selectedItem.size / 1024 / 1024).toFixed(2)} MB • {new Date(selectedItem.lastModifiedDateTime).toLocaleDateString()}</p>
               </div>
               <div className="flex gap-4 shrink-0">
-                  <a href={selectedItem.webUrl} target="_blank" rel="noreferrer" className="p-2 hover:bg-white/20 rounded-full"><Download className="w-5 h-5" /></a>
+                  <a href={selectedItem.webUrl} target="_blank" rel="noreferrer" className="p-2 hover:bg-white/20 rounded-full" title="Mở trong OneDrive"><Download className="w-5 h-5" /></a>
                   <button onClick={handleClose} className="p-2 hover:bg-white/20 rounded-full"><X className="w-6 h-6" /></button>
               </div>
            </div>
@@ -136,19 +109,20 @@ export const Album: React.FC<AlbumProps> = ({ items, color }) => {
            {/* Content */}
            <div className="flex-1 flex items-center justify-center relative w-full h-full p-2" onClick={handleClose}>
                {selectedItem.file?.mimeType?.startsWith('image/') ? (
-                   isLoadingImg ? (
-                       <Loader2 className="w-10 h-10 text-white animate-spin" />
-                   ) : (
+                   <>
+                       {isImgLoading && <Loader2 className="w-10 h-10 text-white animate-spin absolute" />}
                        <img 
-                            src={secureSrc || selectedItem.thumbnailUrl} 
+                            src={getDisplayUrl(selectedItem)} 
                             alt="Full view" 
-                            className="max-h-full max-w-full object-contain shadow-2xl"
+                            className={`max-h-full max-w-full object-contain shadow-2xl transition-opacity duration-300 ${isImgLoading ? 'opacity-0' : 'opacity-100'}`}
                             onClick={(e) => e.stopPropagation()} // Prevent close when clicking image
+                            onLoad={() => setIsImgLoading(false)}
+                            onError={() => setIsImgLoading(false)}
                        />
-                   )
+                   </>
                ) : selectedItem.file?.mimeType?.startsWith('video/') ? (
                    <video controls autoPlay className="max-h-full max-w-full" onClick={(e) => e.stopPropagation()}>
-                       <source src={selectedItem.downloadUrl} type={selectedItem.file?.mimeType} />
+                       <source src={getDisplayUrl(selectedItem)} type={selectedItem.file?.mimeType} />
                        Trình duyệt không hỗ trợ video.
                    </video>
                ) : (
