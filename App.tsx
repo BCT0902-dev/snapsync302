@@ -722,8 +722,9 @@ export default function App() {
     );
   }
 
+  // SỬA ĐỔI LAYOUT: Dùng h-[100dvh] để cố định chiều cao bằng màn hình, Flexbox column để chia layout
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col max-w-md mx-auto shadow-2xl overflow-hidden relative">
+    <div className="h-[100dvh] bg-slate-50 flex flex-col max-w-md mx-auto shadow-2xl overflow-hidden relative">
       {/* Disclaimer Modal */}
       {showDisclaimer && (
         <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
@@ -752,7 +753,8 @@ export default function App() {
         </div>
       )}
 
-      <header className="px-6 py-4 flex justify-between items-center shadow-lg sticky top-0 z-20 transition-colors" style={themeStyle}>
+      {/* HEADER: Flex-none để không bị co giãn */}
+      <header className="flex-none px-6 py-4 flex justify-between items-center shadow-lg z-20 transition-colors" style={themeStyle}>
         <div>
           <h2 className="font-bold text-white text-lg tracking-wide uppercase">{systemConfig.appName}</h2>
           <div className="flex items-center text-white/80 text-xs mt-0.5">
@@ -765,7 +767,8 @@ export default function App() {
         </button>
       </header>
 
-      <main className="flex-1 overflow-y-auto p-4 pb-24 scroll-smooth bg-slate-50">
+      {/* MAIN CONTENT: Flex-1 để chiếm toàn bộ khoảng trống còn lại, overflow-y-auto để cuộn nội dung */}
+      <main className="flex-1 overflow-y-auto p-4 scroll-smooth bg-slate-50">
         <input type="file" accept="*/*" capture="environment" ref={cameraInputRef} onChange={handleFileSelection} className="hidden" />
         <input type="file" multiple accept="*/*" ref={multiFileInputRef} onChange={handleFileSelection} className="hidden" />
         <input type="file" 
@@ -1134,7 +1137,8 @@ export default function App() {
         )}
       </main>
 
-      <nav className="bg-white border-t border-slate-200 flex justify-around items-center py-2 pb-safe absolute bottom-0 w-full z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+      {/* FOOTER NAV: Bỏ absolute để trở thành 1 phần tử flex-none ở cuối cột, đảm bảo luôn nằm dưới cùng màn hình */}
+      <nav className="bg-white border-t border-slate-200 flex justify-around items-center py-2 pb-safe flex-none shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-30">
         <TabButton active={currentView === 'camera'} onClick={() => setCurrentView('camera')} icon={<Camera />} label="Upload" color={systemConfig.themeColor} />
         <TabButton active={currentView === 'gallery'} onClick={() => setCurrentView('gallery')} icon={<Library />} label="Thư viện" color={systemConfig.themeColor} />
         <TabButton active={currentView === 'history'} onClick={() => setCurrentView('history')} icon={<History />} label="Lịch sử" color={systemConfig.themeColor} />

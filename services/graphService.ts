@@ -186,8 +186,8 @@ export const fetchSystemStats = async (config: AppConfig): Promise<Partial<Syste
         const rootData = await rootRes.json();
         
         // 2. Đếm số lượng file (Dùng Search API để quét)
-        // Lưu ý: Search có thể không realtime 100% nhưng là cách tốt nhất để đếm mà không cần duyệt cây đệ quy
-        const searchEndpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='*')?select=id,file,size&top=999`;
+        // Thay đổi query từ q='*' (tìm ký tự sao) thành q='.' (tìm ký tự chấm - có trong hầu hết extension)
+        const searchEndpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='.')?select=id,file,size&top=999`;
         
         const searchRes = await fetch(searchEndpoint, {
              headers: { 'Authorization': `Bearer ${token}` }
@@ -243,8 +243,30 @@ export const uploadToOneDrive = async (
     
     const fullPath = `${config.targetFolder}/${unitFolder}/${userFolder}/${monthFolder}`;
     
-    const fileName = `${Date.now()}_${file.name}`;
-    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${fullPath}/${fileName}:/content`;
+    // --- LOGIC ĐỔI TÊN FILE "GỌN GÀNG, LOGIC" ---
+    // Cũ: Date.now()_filename
+    // Mới: PREFIX_YYYYMMDD_HHmmss_SSS.ext
+    
+    // 1. Xác định Prefix
+    let prefix = 'FILE';
+    if (file.type.startsWith('image/')) prefix = 'IMG';
+    else if (file.type.startsWith('video/')) prefix = 'VID';
+    else if (file.type.includes('pdf') || file.type.includes('word') || file.type.includes('sheet')) prefix = 'DOC';
+
+    // 2. Xác định Extension
+    const parts = file.name.split('.');
+    const ext = parts.length > 1 ? parts.pop() : ''; // Lấy đuôi file gốc
+    
+    // 3. Format thời gian: YYYYMMDD_HHmmss_SSS (SSS để tránh trùng lặp tuyệt đối nếu up nhiều file cùng giây)
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const pad3 = (n: number) => n.toString().padStart(3, '0');
+    
+    const timeStr = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}_${pad3(now.getMilliseconds())}`;
+    
+    const cleanFileName = `${prefix}_${timeStr}${ext ? '.' + ext : ''}`;
+    // ---------------------------------------------
+
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${fullPath}/${cleanFileName}:/content`;
 
     const response = await fetch(endpoint, {
       method: 'PUT',
