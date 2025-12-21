@@ -4,7 +4,7 @@ import { INITIAL_USERS } from './mockAuth';
 
 // Cấu hình mặc định
 export const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
-  appName: "SnapSync 302",
+  appName: "Mediaf302",
   logoUrl: "/logo302.svg", // Fallback ban đầu
   themeColor: "#059669" // Emerald 600
 };
