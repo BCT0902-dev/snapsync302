@@ -20,7 +20,7 @@ import {
   BarChart3, Grid
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.01";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.02";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
@@ -107,6 +107,7 @@ export default function App() {
 
   // Share View State (Legacy - keeping for fallback but prioritizing Gallery)
   const [sharingItem, setSharingItem] = useState<string | null>(null); 
+  const [downloadingFolderId, setDownloadingFolderId] = useState<string | null>(null);
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const multiFileInputRef = useRef<HTMLInputElement>(null);
@@ -528,6 +529,63 @@ export default function App() {
       } finally {
           setSharingItem(null);
       }
+  };
+
+  const handleDownloadFolder = async (item: CloudItem) => {
+    if (!user) return;
+    
+    // 1. Xác định đường dẫn thư mục
+    const currentPath = galleryBreadcrumbs.map(b => b.path).filter(p => p && p !== 'ALL_MEDIA_SPECIAL_KEY').join('/');
+    const folderPath = currentPath ? `${currentPath}/${item.name}` : item.name;
+
+    setDownloadingFolderId(item.id);
+    
+    try {
+        // 2. Lấy danh sách file trong thư mục (Lấy cả subfolders nhưng chỉ tải file ở level 1 cho an toàn)
+        // Lưu ý: Nếu muốn tải sâu (recursive), cần logic phức tạp hơn. Ở đây hỗ trợ tải các file trực tiếp trong folder.
+        const items = await listPathContents(config, folderPath);
+        const files = items.filter(i => i.file);
+
+        if (files.length === 0) {
+            alert("Thư mục trống hoặc không chứa file trực tiếp.");
+            return;
+        }
+        
+        const confirmMsg = `Thư mục có ${files.length} file. Bạn có muốn tải xuống lần lượt không?`;
+        if (!confirm(confirmMsg)) return;
+
+        // 3. Tải tuần tự
+        let successCount = 0;
+        for (const file of files) {
+            const targetUrl = file.downloadUrl || file.webUrl;
+            try {
+                // Fetch blob để ép tên file và tránh mở tab
+                const res = await fetch(targetUrl);
+                if(res.ok) {
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = file.name;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    successCount++;
+                }
+            } catch (e) {
+                console.error(`Lỗi tải file ${file.name}`, e);
+            }
+            // Delay nhỏ để tránh treo trình duyệt
+            await new Promise(resolve => setTimeout(resolve, 800));
+        }
+        
+    } catch (e) {
+        console.error(e);
+        alert("Có lỗi xảy ra khi tải thư mục.");
+    } finally {
+        setDownloadingFolderId(null);
+    }
   };
 
 
@@ -986,7 +1044,14 @@ export default function App() {
                                                </p>
                                            </div>
                                        </div>
-                                       <div className="flex items-center">
+                                       <div className="flex items-center gap-1">
+                                           <button 
+                                                onClick={(e) => { e.stopPropagation(); handleDownloadFolder(item); }}
+                                                className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-full"
+                                                title="Tải toàn bộ thư mục"
+                                           >
+                                               {downloadingFolderId === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                                           </button>
                                            <button 
                                                 onClick={(e) => { e.stopPropagation(); handleCreateGalleryLink(item); }}
                                                 className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full"
