@@ -1,19 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { User, PhotoRecord, UploadStatus, AppConfig, SystemConfig } from './types';
+import { User, PhotoRecord, UploadStatus, AppConfig, SystemConfig, CloudItem } from './types';
 import { INITIAL_USERS, login } from './services/mockAuth';
 import { 
   uploadToOneDrive, fetchUsersFromOneDrive, saveUsersToOneDrive, 
   listUserMonthFolders, listFilesInMonthFolder, createShareLink,
   fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles,
-  getAccessToken
+  getAccessToken, listPathContents
 } from './services/graphService';
 import { Button } from './components/Button';
+import { Album } from './components/Album';
 import { 
   Camera, LogOut, Info, Settings, History, CheckCircle, XCircle, 
   Loader2, Image as ImageIcon, Users, Trash2, Plus, Edit,
   FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
-  Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, Download,
-  AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud
+  Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
+  AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -76,8 +77,8 @@ export default function App() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [regData, setRegData] = useState({ username: '', password: '', displayName: '', unit: '' });
   
-  // Views: camera, history, share, settings
-  const [currentView, setCurrentView] = useState<'camera' | 'history' | 'share' | 'settings'>('camera');
+  // Views: camera, history, gallery, settings
+  const [currentView, setCurrentView] = useState<'camera' | 'history' | 'gallery' | 'settings'>('camera');
   const [photos, setPhotos] = useState<PhotoRecord[]>([]);
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
@@ -91,11 +92,12 @@ export default function App() {
   const [tempSysConfig, setTempSysConfig] = useState<SystemConfig>(systemConfig); // Init from state
   const [isSavingConfig, setIsSavingConfig] = useState(false);
 
-  // Share View State
-  const [shareFolders, setShareFolders] = useState<any[]>([]);
-  const [currentShareFolder, setCurrentShareFolder] = useState<string | null>(null);
-  const [shareFiles, setShareFiles] = useState<any[]>([]);
-  const [isLoadingShare, setIsLoadingShare] = useState(false);
+  // Gallery View State (NEW)
+  const [galleryBreadcrumbs, setGalleryBreadcrumbs] = useState<{name: string, path: string}[]>([{name: 'Toàn đơn vị', path: ''}]);
+  const [galleryItems, setGalleryItems] = useState<CloudItem[]>([]);
+  const [isGalleryLoading, setIsGalleryLoading] = useState(false);
+
+  // Share View State (Legacy - keeping for fallback but prioritizing Gallery)
   const [sharingItem, setSharingItem] = useState<string | null>(null); 
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -152,9 +154,12 @@ export default function App() {
     initData();
   }, []);
 
+  // Fetch gallery when switching to gallery view
   useEffect(() => {
-    if (currentView === 'share' && user) {
-      loadShareFolders();
+    if (currentView === 'gallery' && user) {
+        // Luôn load root khi vào gallery
+        loadGalleryPath("");
+        setGalleryBreadcrumbs([{name: 'Thư viện', path: ''}]);
     }
   }, [currentView, user]);
 
@@ -264,10 +269,7 @@ export default function App() {
     setUsername('');
     setPassword('');
     setCurrentView('camera');
-    setShareFolders([]);
-    setShareFiles([]);
     setPhotos([]); // Clear local photos
-    setCurrentShareFolder(null);
     setShowDisclaimer(false);
   };
 
@@ -392,53 +394,69 @@ export default function App() {
     event.target.value = '';
   };
 
-  const loadShareFolders = async () => {
+  // --- GALLERY HANDLERS ---
+  const loadGalleryPath = async (path: string) => {
     if (!user) return;
-    setIsLoadingShare(true);
+    setIsGalleryLoading(true);
     try {
-      const folders = await listUserMonthFolders(config, user);
-      setShareFolders(folders.sort((a: any, b: any) => b.name.localeCompare(a.name)));
-    } catch (e) {
-      console.error(e);
+        const items = await listPathContents(config, path);
+        // Sắp xếp: Folder lên trước, File sau
+        const sorted = items.sort((a, b) => {
+            if (a.folder && !b.folder) return -1;
+            if (!a.folder && b.folder) return 1;
+            return a.name.localeCompare(b.name);
+        });
+        setGalleryItems(sorted);
+    } catch(e) {
+        console.error(e);
+        setGalleryItems([]);
     } finally {
-      setIsLoadingShare(false);
+        setIsGalleryLoading(false);
     }
   };
 
-  const openShareFolder = async (folderName: string) => {
-    if (!user) return;
-    setIsLoadingShare(true);
-    setCurrentShareFolder(folderName);
-    try {
-      const files = await listFilesInMonthFolder(config, user, folderName);
-      setShareFiles(files);
-    } catch (e) {
-      console.error(e);
-      setShareFiles([]);
-    } finally {
-      setIsLoadingShare(false);
+  const handleGalleryClick = (item: CloudItem) => {
+    if (item.folder) {
+        // Là thư mục -> đi sâu vào
+        const newBreadcrumb = { name: item.name, path: item.name };
+        
+        // Tính toán full relative path
+        const currentPathString = galleryBreadcrumbs.map(b => b.path).filter(p => p).join('/');
+        const newPathString = currentPathString ? `${currentPathString}/${item.name}` : item.name;
+
+        // Cập nhật breadcrumbs với path ĐẦY ĐỦ thực tế để dễ query
+        setGalleryBreadcrumbs(prev => [...prev, { name: item.name, path: item.name }]);
+        loadGalleryPath(newPathString);
     }
+    // File được xử lý bởi component Album hoặc bỏ qua nếu không phải ảnh
   };
 
-  const handleCreateLink = async (itemName: string, isFolder: boolean) => {
-    if (!user) return;
-    setSharingItem(itemName);
-    try {
-      const relativePath = isFolder ? itemName : `${currentShareFolder}/${itemName}`;
-      const link = await createShareLink(config, user, relativePath);
-      await navigator.clipboard.writeText(link);
+  const handleBreadcrumbClick = (index: number) => {
+      const newBreadcrumbs = galleryBreadcrumbs.slice(0, index + 1);
+      setGalleryBreadcrumbs(newBreadcrumbs);
       
-      const message = itemName === "" 
-        ? `Đã copy Link Tổng hợp (Toàn bộ dữ liệu)!\n\n${link}`
-        : `Đã copy link chia sẻ ${isFolder ? 'thư mục' : 'file'}!\n\n${link}`;
-
-      alert(message);
-    } catch (error: any) {
-      alert(`Lỗi tạo link: ${error.message}`);
-    } finally {
-      setSharingItem(null);
-    }
+      const newPathString = newBreadcrumbs.map(b => b.path).filter(p => p).join('/');
+      loadGalleryPath(newPathString);
   };
+
+  const handleCreateGalleryLink = async (item: CloudItem) => {
+      // Logic share link trong Gallery
+      if (!user) return;
+      setSharingItem(item.id);
+      try {
+          const currentPathString = galleryBreadcrumbs.map(b => b.path).filter(p => p).join('/');
+          const relativePath = currentPathString ? `${currentPathString}/${item.name}` : item.name;
+          
+          const link = await createShareLink(config, user, relativePath);
+          await navigator.clipboard.writeText(link);
+          alert(`Đã copy link chia sẻ: ${item.name}`);
+      } catch(e: any) {
+          alert("Lỗi tạo link: " + e.message);
+      } finally {
+          setSharingItem(null);
+      }
+  };
+
 
   const getFileIcon = (fileName: string, mimeType?: string) => {
     if (mimeType?.startsWith('image/') || fileName.match(/\.(jpg|jpeg|png|gif|webp)$/i)) return <ImageIcon className="w-6 h-6 text-emerald-600" />;
@@ -615,18 +633,13 @@ export default function App() {
   }
 
   if (!user) {
-    // ... Login UI
+    // ... Login UI (Giữ nguyên)
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col justify-center px-6 animate-in zoom-in duration-500 ease-out">
         <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full mx-auto">
           <div className="flex justify-center mb-6">
             <div className="w-24 h-24 rounded-full flex items-center justify-center border-4 border-white shadow-md overflow-hidden bg-white p-2">
-              {/* Logo from Config */}
-              <img 
-                src={systemConfig.logoUrl || "/logo302.svg"} 
-                className="w-full h-full object-contain" 
-                alt="Logo" 
-              />
+              <img src={systemConfig.logoUrl || "/logo302.svg"} className="w-full h-full object-contain" alt="Logo" />
             </div>
           </div>
           <h1 className="text-2xl font-bold text-center mb-1 uppercase tracking-tight" style={textThemeStyle}>{systemConfig.appName}</h1>
@@ -821,87 +834,93 @@ export default function App() {
           </div>
         )}
 
-        {currentView === 'share' && (
-          <div className="space-y-4">
-            <h3 className="font-bold text-slate-800 text-lg flex items-center">
-              <Share2 className="w-5 h-5 mr-2" style={textThemeStyle} />
-              Chia sẻ dữ liệu
+        {/* --- GALLERY VIEW START --- */}
+        {currentView === 'gallery' && (
+          <div className="space-y-4 h-full flex flex-col">
+            <h3 className="font-bold text-slate-800 text-lg flex items-center flex-shrink-0">
+              <Library className="w-5 h-5 mr-2" style={textThemeStyle} />
+              Thư viện chung
             </h3>
             
-            {/* ...Share Logic ... */}
-            {!currentShareFolder ? (
-              <div className="space-y-3">
-                <p className="text-sm text-slate-500 mb-2">Chọn thư mục tháng để xem và chia sẻ.</p>
-                
-                {/* NEW: MASTER LINK BUTTON */}
-                <div className="bg-gradient-to-r from-emerald-500 to-teal-600 rounded-xl p-4 text-white shadow-lg flex items-center justify-between mb-4">
-                  <div>
-                    <h4 className="font-bold flex items-center"><Database className="w-5 h-5 mr-2" /> Link Tổng Hợp</h4>
-                    <p className="text-emerald-100 text-xs mt-1">Chia sẻ toàn bộ dữ liệu của: {user.displayName}</p>
-                  </div>
+            {/* Breadcrumbs */}
+            <div className="flex items-center space-x-1 text-sm overflow-x-auto pb-2 flex-shrink-0 scrollbar-hide">
+              {galleryBreadcrumbs.map((crumb, idx) => (
+                <div key={idx} className="flex items-center flex-shrink-0">
+                  {idx > 0 && <ChevronRight className="w-4 h-4 text-slate-400 mx-1" />}
                   <button 
-                    onClick={() => handleCreateLink("", true)} 
-                    disabled={sharingItem === ""}
-                    className="bg-white/20 hover:bg-white/30 p-2 px-3 rounded-lg backdrop-blur-sm transition-all active:scale-95 flex items-center font-bold text-xs border border-white/30"
+                    onClick={() => handleBreadcrumbClick(idx)}
+                    className={`font-medium px-2 py-1 rounded-md transition-colors ${idx === galleryBreadcrumbs.length - 1 ? 'bg-slate-100 text-slate-800 font-bold' : 'text-slate-500 hover:text-emerald-600 hover:bg-slate-50'}`}
                   >
-                    {sharingItem === "" ? <Loader2 className="w-5 h-5 animate-spin" /> : <><LinkIcon className="w-4 h-4 mr-2" /> Copy Link</>}
+                    {idx === 0 ? <Home className="w-4 h-4" /> : crumb.name}
                   </button>
                 </div>
-                {/* END NEW */}
+              ))}
+            </div>
 
-                {isLoadingShare ? (
-                  <div className="py-8 text-center text-slate-400"><Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" /> Đang tải danh sách...</div>
-                ) : shareFolders.length === 0 ? (
-                   <div className="py-8 text-center text-slate-400 border border-dashed border-slate-200 rounded-xl bg-slate-50">Chưa có thư mục nào trên Cloud.</div>
-                ) : (
-                  shareFolders.map(folder => (
-                    <div key={folder.id} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between">
-                       <div className="flex items-center cursor-pointer flex-1" onClick={() => openShareFolder(folder.name)}>
-                         <Folder className="w-10 h-10 text-amber-400 fill-current mr-3" />
-                         <div>
-                           <p className="font-bold text-slate-700">{folder.name}</p>
-                           <p className="text-xs text-slate-400">Thư mục tháng</p>
-                         </div>
-                       </div>
-                       <button onClick={() => handleCreateLink(folder.name, true)} disabled={sharingItem === folder.name} className="p-2 ml-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors">
-                         {sharingItem === folder.name ? <Loader2 className="w-5 h-5 animate-spin" /> : <LinkIcon className="w-5 h-5" />}
-                       </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            ) : (
-              <div className="space-y-3 animate-in fade-in slide-in-from-right-4 duration-300">
-                <button onClick={() => { setCurrentShareFolder(null); setShareFiles([]); }} className="text-sm font-bold text-slate-500 hover:text-primary-600 flex items-center mb-2">
-                  <ChevronLeft className="w-4 h-4 mr-1" /> Quay lại
-                </button>
-                <div className="flex items-center justify-between mb-4">
-                  <h4 className="font-bold text-slate-800 flex items-center"><FolderOpen className="w-5 h-5 text-amber-400 mr-2" /> {currentShareFolder}</h4>
-                  <button onClick={() => handleCreateLink(currentShareFolder!, true)} disabled={sharingItem === currentShareFolder} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg flex items-center font-bold shadow-sm active:scale-95">
-                     {sharingItem === currentShareFolder ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <LinkIcon className="w-3 h-3 mr-1" />} Share Folder
-                  </button>
-                </div>
-                {isLoadingShare ? <div className="py-8 text-center text-slate-400"><Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" /> Đang tải file...</div> : 
-                  shareFiles.length === 0 ? <p className="text-center text-slate-400 py-8">Thư mục trống</p> : 
-                  shareFiles.map(file => (
-                    <div key={file.id} className="bg-white p-3 rounded-lg border border-slate-100 flex items-center justify-between">
-                       <div className="flex items-center min-w-0 flex-1">
-                         {getFileIcon(file.name, file.file?.mimeType)}
-                         <div className="ml-3 min-w-0">
-                           <p className="text-sm font-medium text-slate-700 truncate">{file.name}</p>
-                           <p className="text-[10px] text-slate-400">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
-                         </div>
-                       </div>
-                       <button onClick={() => handleCreateLink(file.name, false)} disabled={sharingItem === file.name} className="p-2 ml-2 text-slate-400 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 rounded-lg">
-                         {sharingItem === file.name ? <Loader2 className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
-                       </button>
-                    </div>
-                  ))
-                }
-              </div>
-            )}
+            {/* Content Area */}
+            <div className="flex-1 overflow-y-auto">
+               {isGalleryLoading ? (
+                   <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                       <Loader2 className="w-8 h-8 animate-spin mb-2" />
+                       <span className="text-xs">Đang tải dữ liệu...</span>
+                   </div>
+               ) : galleryItems.length === 0 ? (
+                   <div className="text-center py-12 text-slate-400 border border-dashed border-slate-200 rounded-xl bg-slate-50">
+                       Thư mục trống
+                   </div>
+               ) : (
+                   <div className="space-y-4">
+                       {/* 1. Folder List (Nếu có) */}
+                       {galleryItems.filter(i => i.folder).length > 0 && (
+                           <div className="space-y-2">
+                               {galleryItems.filter(i => i.folder).map(item => (
+                                   <div 
+                                       key={item.id} 
+                                       className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between active:scale-[0.98] transition-transform cursor-pointer"
+                                       onClick={() => handleGalleryClick(item)}
+                                   >
+                                       <div className="flex items-center min-w-0 flex-1">
+                                           <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center mr-3 flex-shrink-0">
+                                                <Folder className="w-6 h-6 text-amber-500 fill-amber-500" />
+                                            </div>
+                                           <div className="min-w-0">
+                                               <p className="font-bold text-slate-700 text-sm truncate">{item.name}</p>
+                                               <p className="text-[10px] text-slate-400">
+                                                   {item.folder?.childCount} mục • {new Date(item.lastModifiedDateTime).toLocaleDateString()}
+                                               </p>
+                                           </div>
+                                       </div>
+                                       <div className="flex items-center">
+                                           <button 
+                                                onClick={(e) => { e.stopPropagation(); handleCreateGalleryLink(item); }}
+                                                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full"
+                                           >
+                                               {sharingItem === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
+                                           </button>
+                                           <ChevronRight className="w-4 h-4 text-slate-300 ml-1" />
+                                       </div>
+                                   </div>
+                               ))}
+                           </div>
+                       )}
+
+                       {/* 2. Photo Album Grid (Nếu có file) */}
+                       {galleryItems.filter(i => i.file).length > 0 && (
+                           <div>
+                               {galleryItems.filter(i => i.folder).length > 0 && (
+                                   <div className="flex items-center gap-2 mb-2 mt-4 text-slate-500 text-xs font-bold uppercase tracking-wider">
+                                       <ImageIcon className="w-4 h-4" /> Hình ảnh / Video
+                                   </div>
+                               )}
+                               <Album items={galleryItems.filter(i => i.file)} color={systemConfig.themeColor} />
+                           </div>
+                       )}
+                   </div>
+               )}
+            </div>
           </div>
         )}
+        {/* --- GALLERY VIEW END --- */}
 
         {currentView === 'settings' && user.role === 'admin' && (
           <div className="space-y-6">
@@ -1072,7 +1091,7 @@ export default function App() {
 
       <nav className="bg-white border-t border-slate-200 flex justify-around items-center py-2 pb-safe absolute bottom-0 w-full z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
         <TabButton active={currentView === 'camera'} onClick={() => setCurrentView('camera')} icon={<Camera />} label="Upload" color={systemConfig.themeColor} />
-        <TabButton active={currentView === 'share'} onClick={() => setCurrentView('share')} icon={<Share2 />} label="Chia sẻ" color={systemConfig.themeColor} />
+        <TabButton active={currentView === 'gallery'} onClick={() => setCurrentView('gallery')} icon={<Library />} label="Thư viện" color={systemConfig.themeColor} />
         <TabButton active={currentView === 'history'} onClick={() => setCurrentView('history')} icon={<History />} label="Lịch sử" color={systemConfig.themeColor} />
         {user.role === 'admin' && (
           <TabButton active={currentView === 'settings'} onClick={() => setCurrentView('settings')} icon={<Settings />} label="Quản trị" color={systemConfig.themeColor} />

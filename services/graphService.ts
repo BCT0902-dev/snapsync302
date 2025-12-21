@@ -1,5 +1,5 @@
 
-import { AppConfig, User, SystemConfig, PhotoRecord, UploadStatus } from '../types';
+import { AppConfig, User, SystemConfig, PhotoRecord, UploadStatus, CloudItem } from '../types';
 import { INITIAL_USERS } from './mockAuth';
 
 // Cấu hình mặc định
@@ -266,7 +266,8 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
         uploadedUrl: item.webUrl,
         timestamp: new Date(item.createdDateTime),
         size: item.size,
-        previewUrl: thumbnailUrl 
+        previewUrl: thumbnailUrl,
+        mimeType: item.file?.mimeType 
       };
     });
 
@@ -282,55 +283,35 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
  * SHARE: Lấy danh sách thư mục tháng
  */
 export const listUserMonthFolders = async (config: AppConfig, user: User) => {
+  // Hàm cũ, vẫn giữ để tương thích ngược nếu cần, nhưng logic Gallery sẽ dùng hàm mới bên dưới
   if (config.simulateMode) return [];
   try {
     const token = await getAccessToken();
     const unitFolder = user.unit || 'Unknown_Unit';
     const path = `${config.targetFolder}/${unitFolder}/${user.username}`;
-    
     const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children`;
-    
-    const response = await fetch(endpoint, {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-
+    const response = await fetch(endpoint, { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } });
     if (response.status === 404) return [];
-    if (!response.ok) throw new Error("Lỗi tải danh sách thư mục");
-
     const data = await response.json();
     return data.value.filter((item: any) => item.folder);
-  } catch (error) {
-    console.error("List Folders Error:", error);
-    return [];
-  }
+  } catch (error) { return []; }
 };
 
 /**
  * SHARE: Lấy danh sách file trong thư mục
  */
 export const listFilesInMonthFolder = async (config: AppConfig, user: User, monthName: string) => {
+  // Hàm cũ
   if (config.simulateMode) return [];
   try {
     const token = await getAccessToken();
     const unitFolder = user.unit || 'Unknown_Unit';
     const path = `${config.targetFolder}/${unitFolder}/${user.username}/${monthName}`;
-    
     const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children`;
-    
-    const response = await fetch(endpoint, {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-
-    if (!response.ok) throw new Error("Lỗi tải danh sách file");
-
+    const response = await fetch(endpoint, { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } });
     const data = await response.json();
     return data.value;
-  } catch (error) {
-    console.error("List Files Error:", error);
-    return [];
-  }
+  } catch (error) { return []; }
 };
 
 /**
@@ -373,5 +354,64 @@ export const createShareLink = async (config: AppConfig, user: User, relativePat
   } catch (error) {
     console.error("Create Link Error:", error);
     throw error;
+  }
+};
+
+/**
+ * GALLERY: Duyệt nội dung thư mục động theo Path
+ * Nếu relativePath = "" -> Lấy root (list các đơn vị)
+ */
+export const listPathContents = async (config: AppConfig, relativePath: string = ""): Promise<CloudItem[]> => {
+  if (config.simulateMode) {
+    // Mock data
+    if (relativePath === "") return [{ id: '1', name: 'Sư đoàn 302', folder: {childCount: 1}, webUrl: '#', lastModifiedDateTime: new Date().toISOString(), size: 0 }];
+    return [];
+  }
+
+  try {
+    const token = await getAccessToken();
+    
+    // Xây dựng path đầy đủ: SnapSync302 / [relativePath]
+    let path = config.targetFolder;
+    if (relativePath) {
+      path += `/${relativePath}`;
+    }
+
+    // expand=thumbnails để lấy ảnh hiển thị cho album
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children?expand=thumbnails`;
+
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+
+    if (response.status === 404) return [];
+    if (!response.ok) throw new Error("Lỗi tải dữ liệu thư mục");
+
+    const data = await response.json();
+    
+    return data.value.map((item: any) => {
+       // Lấy thumbnail tốt nhất
+       let thumb = "";
+       if (item.thumbnails && item.thumbnails.length > 0) {
+         thumb = item.thumbnails[0].large?.url || item.thumbnails[0].medium?.url || item.thumbnails[0].small?.url;
+       }
+
+       return {
+         id: item.id,
+         name: item.name,
+         folder: item.folder,
+         file: item.file,
+         webUrl: item.webUrl,
+         lastModifiedDateTime: item.lastModifiedDateTime,
+         size: item.size,
+         thumbnailUrl: thumb,
+         downloadUrl: item['@microsoft.graph.downloadUrl']
+       } as CloudItem;
+    });
+
+  } catch (error) {
+    console.error("Gallery Fetch Error:", error);
+    return [];
   }
 };

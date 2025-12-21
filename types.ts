@@ -26,6 +26,7 @@ export interface PhotoRecord {
   timestamp: Date;
   errorMessage?: string;
   size?: number;
+  mimeType?: string; // Thêm mimeType để nhận biết video/ảnh
 }
 
 export interface AppConfig {
@@ -38,4 +39,17 @@ export interface SystemConfig {
   appName: string;
   logoUrl: string;
   themeColor: string; // Hex code
+}
+
+// Type mới cho item trong Gallery (Cloud Item)
+export interface CloudItem {
+  id: string;
+  name: string;
+  folder?: { childCount: number };
+  file?: { mimeType: string };
+  webUrl: string;
+  lastModifiedDateTime: string;
+  size: number;
+  thumbnailUrl?: string; // Link ảnh thumb
+  downloadUrl?: string; // Link tải trực tiếp (@microsoft.graph.downloadUrl)
 }
