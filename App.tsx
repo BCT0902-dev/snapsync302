@@ -456,7 +456,7 @@ export default function App() {
         // Lọc thư mục nhạy cảm đối với user thường và guest
         let displayItems = items;
         if (user.role !== 'admin') {
-            // Danh sách các folder cần ẩn
+            // Danh sách các folder cần ẩn - UPDATE: Thêm quan_tri_vien
             const HIDDEN_FOLDERS = ['system', 'bo_chi_huy', 'quan_tri_vien'];
             displayItems = items.filter(i => !HIDDEN_FOLDERS.includes(i.name.toLowerCase()));
         }

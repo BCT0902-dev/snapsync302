@@ -282,28 +282,50 @@ export const uploadToOneDrive = async (
 
     if (file.size < MAX_SIMPLE_UPLOAD_SIZE) {
         // --- CÁCH 1: SIMPLE UPLOAD (Cho file nhỏ) ---
-        if (onProgress) onProgress(10); // Start fake progress
-
-        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${fullPath}/${cleanFileName}:/content`;
-
-        const response = await fetch(endpoint, {
-            method: 'PUT',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': file.type || 'application/octet-stream',
-            },
-            body: file,
+        // SỬ DỤNG XMLHttpRequest ĐỂ CÓ PROGRESS EVENT CHUẨN XÁC
+        
+        return new Promise((resolve, reject) => {
+            const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${fullPath}/${cleanFileName}:/content`;
+            const xhr = new XMLHttpRequest();
+            
+            xhr.open('PUT', endpoint);
+            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+            xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+            
+            // Hook vào sự kiện progress
+            xhr.upload.onprogress = (event) => {
+                if (event.lengthComputable && onProgress) {
+                    const percent = Math.round((event.loaded / event.total) * 100);
+                    onProgress(percent);
+                }
+            };
+            
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        const data = JSON.parse(xhr.responseText);
+                        resolve({ success: true, url: data.webUrl });
+                    } catch (e) {
+                        resolve({ success: true, url: '' }); // Fallback success
+                    }
+                } else {
+                    let errorMessage = xhr.statusText;
+                    try {
+                        const errBody = JSON.parse(xhr.responseText);
+                        if (errBody.error && errBody.error.message) {
+                            errorMessage = errBody.error.message;
+                        }
+                    } catch (e) {}
+                    reject(new Error(errorMessage));
+                }
+            };
+            
+            xhr.onerror = () => {
+                reject(new Error("Lỗi kết nối mạng khi tải ảnh"));
+            };
+            
+            xhr.send(file);
         });
-
-        if (onProgress) onProgress(100); // Done
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error?.message || response.statusText);
-        }
-
-        const data = await response.json();
-        return { success: true, url: data.webUrl };
 
     } else {
         // --- CÁCH 2: RESUMABLE UPLOAD (Cho file lớn - Video) ---
@@ -625,6 +647,7 @@ const crawlFolderRecursive = async (token: string, folderId: string, results: Cl
             // Check bảo mật
             if (user.role !== 'admin') {
                 const name = item.name.toLowerCase();
+                // UPDATE: Thêm quan_tri_vien vào danh sách chặn
                 if (name === 'system' || name === 'bo_chi_huy' || name === 'quan_tri_vien') continue;
             }
 
