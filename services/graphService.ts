@@ -184,24 +184,38 @@ export const fetchSystemStats = async (config: AppConfig): Promise<Partial<Syste
             headers: { 'Authorization': `Bearer ${token}` }
         });
         const rootData = await rootRes.json();
+        const totalStorage = rootData.size || 0;
         
         // 2. Đếm số lượng file (Dùng Search API để quét)
         // Thay đổi query từ q='*' (tìm ký tự sao) thành q='.' (tìm ký tự chấm - có trong hầu hết extension)
-        const searchEndpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='.')?select=id,file,size&top=999`;
-        
-        const searchRes = await fetch(searchEndpoint, {
-             headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const searchData = await searchRes.json();
+        // Bổ sung vòng lặp Pagination để đếm > 999 files
         
         let fileCount = 0;
-        if (searchData.value) {
-            // Lọc những item có thuộc tính 'file'
-            fileCount = searchData.value.filter((item: any) => item.file).length;
+        let nextLink = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='.')?select=id,file,size&top=999`;
+
+        while (nextLink) {
+             const searchRes = await fetch(nextLink, {
+                 headers: { 'Authorization': `Bearer ${token}` }
+             });
+             
+             if (!searchRes.ok) {
+                 // Nếu search lỗi (ví dụ chưa index xong), break loop để không treo, nhưng vẫn trả về count đã đếm đc (nếu có)
+                 break;
+             }
+
+             const searchData = await searchRes.json();
+             if (searchData.value) {
+                 // Lọc những item có thuộc tính 'file'
+                 const count = searchData.value.filter((item: any) => item.file).length;
+                 fileCount += count;
+             }
+
+             // Lấy link trang tiếp theo (nếu có)
+             nextLink = searchData['@odata.nextLink'];
         }
 
         return {
-            totalStorage: rootData.size || 0,
+            totalStorage: totalStorage,
             totalFiles: fileCount
         };
 
