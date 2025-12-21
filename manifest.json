@@ -1,7 +1,8 @@
+
 {
   "name": "Mediaf302",
   "short_name": "Mediaf302",
-  "start_url": "/",
+  "start_url": ".",
   "display": "standalone",
   "background_color": "#ecfdf5",
   "theme_color": "#059669",
