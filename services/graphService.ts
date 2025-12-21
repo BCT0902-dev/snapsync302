@@ -520,14 +520,13 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
         const token = await getAccessToken();
         const rootPath = config.targetFolder;
 
-        // --- CẢI TIẾN: SỬ DỤNG VÒNG LẶP ĐỂ LẤY HẾT KẾT QUẢ (PAGINATION) ---
-        // Sử dụng q='*' để tìm tất cả
-        // top=200 để lấy nhiều item mỗi lần request (Max thường là 200-500)
-        let nextLink = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='*')?select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference&expand=thumbnails&top=200`;
+        // --- FIXED: Sử dụng q='.' thay vì '*' để tránh lỗi 400 Bad Request ---
+        // q='.' nghĩa là tìm file có dấu chấm (hầu hết file ảnh/video đều có đuôi mở rộng)
+        let nextLink = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='.')?select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference&expand=thumbnails&top=200`;
         
         const results: CloudItem[] = [];
 
-        // Vòng lặp tải trang
+        // Vòng lặp tải trang (Pagination) để đảm bảo lấy hết file
         while (nextLink) {
             const response = await fetch(nextLink, {
                 method: 'GET',
@@ -547,7 +546,7 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
                     if (!item.file) continue;
 
                     // 2. Logic xác định Ảnh/Video:
-                    // Nhiều khi search API trả về mimeType rỗng, nên ta check cả đuôi file
+                    // Check cả mimeType và đuôi file để tránh trường hợp mimeType bị null
                     const name = item.name.toLowerCase();
                     const mime = item.file.mimeType || '';
 
