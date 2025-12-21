@@ -175,9 +175,9 @@ export const fetchSystemStats = async (config: AppConfig): Promise<Partial<Syste
 
     try {
         const token = await getAccessToken();
+        const rootPath = config.targetFolder;
         
         // 1. Lấy thông tin thư mục gốc để biết tổng dung lượng (Size của folder bao gồm con)
-        const rootPath = config.targetFolder;
         const rootEndpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}`;
         
         const rootRes = await fetch(rootEndpoint, {
@@ -186,32 +186,40 @@ export const fetchSystemStats = async (config: AppConfig): Promise<Partial<Syste
         const rootData = await rootRes.json();
         const totalStorage = rootData.size || 0;
         
-        // 2. Đếm số lượng file (Dùng Search API để quét)
-        // Thay đổi query từ q='*' (tìm ký tự sao) thành q='.' (tìm ký tự chấm - có trong hầu hết extension)
-        // Bổ sung vòng lặp Pagination để đếm > 999 files
-        
+        // 2. Đếm số lượng file chính xác bằng Delta API
+        // Delta API trả về toàn bộ cây thư mục (flattened list), không bị delay như Search API
+        // select=id,name,file,deleted để tối ưu payload
         let fileCount = 0;
-        let nextLink = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='.')?select=id,file,size&top=999`;
+        let nextLink = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/delta?select=id,name,file,deleted`;
 
         while (nextLink) {
-             const searchRes = await fetch(nextLink, {
+             const res = await fetch(nextLink, {
                  headers: { 'Authorization': `Bearer ${token}` }
              });
              
-             if (!searchRes.ok) {
-                 // Nếu search lỗi (ví dụ chưa index xong), break loop để không treo, nhưng vẫn trả về count đã đếm đc (nếu có)
+             if (!res.ok) {
+                 // Nếu lỗi (ví dụ token hết hạn giữa chừng), break để trả về kết quả hiện tại
+                 console.warn("Delta query interrupted", res.statusText);
                  break;
              }
 
-             const searchData = await searchRes.json();
-             if (searchData.value) {
-                 // Lọc những item có thuộc tính 'file'
-                 const count = searchData.value.filter((item: any) => item.file).length;
-                 fileCount += count;
+             const data = await res.json();
+             
+             if (data.value) {
+                 for (const item of data.value) {
+                     // Chỉ đếm Item là File và chưa bị xóa
+                     if (item.file && !item.deleted) {
+                         // Loại trừ các file cấu hình hệ thống (nếu muốn thống kê ảnh/video thuần túy)
+                         const name = item.name.toLowerCase();
+                         if (name !== 'users.json' && name !== 'config.json') {
+                             fileCount++;
+                         }
+                     }
+                 }
              }
 
-             // Lấy link trang tiếp theo (nếu có)
-             nextLink = searchData['@odata.nextLink'];
+             // Lấy link trang tiếp theo (Pagination)
+             nextLink = data['@odata.nextLink'];
         }
 
         return {
