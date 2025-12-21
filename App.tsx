@@ -400,8 +400,17 @@ export default function App() {
     setIsGalleryLoading(true);
     try {
         const items = await listPathContents(config, path);
+        
+        // Lọc thư mục nhạy cảm đối với user thường
+        let displayItems = items;
+        if (user.role !== 'admin') {
+            // Danh sách các folder cần ẩn
+            const HIDDEN_FOLDERS = ['system', 'bo_chi_huy', 'quan_tri_vien'];
+            displayItems = items.filter(i => !HIDDEN_FOLDERS.includes(i.name.toLowerCase()));
+        }
+
         // Sắp xếp: Folder lên trước, File sau
-        const sorted = items.sort((a, b) => {
+        const sorted = displayItems.sort((a, b) => {
             if (a.folder && !b.folder) return -1;
             if (!a.folder && b.folder) return 1;
             return a.name.localeCompare(b.name);
