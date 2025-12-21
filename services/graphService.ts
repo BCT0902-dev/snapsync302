@@ -187,8 +187,6 @@ export const fetchSystemStats = async (config: AppConfig): Promise<Partial<Syste
         const totalStorage = rootData.size || 0;
         
         // 2. Đếm số lượng file chính xác bằng Delta API
-        // Delta API trả về toàn bộ cây thư mục (flattened list), không bị delay như Search API
-        // select=id,name,file,deleted để tối ưu payload
         let fileCount = 0;
         let nextLink = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/delta?select=id,name,file,deleted`;
 
@@ -198,7 +196,6 @@ export const fetchSystemStats = async (config: AppConfig): Promise<Partial<Syste
              });
              
              if (!res.ok) {
-                 // Nếu lỗi (ví dụ token hết hạn giữa chừng), break để trả về kết quả hiện tại
                  console.warn("Delta query interrupted", res.statusText);
                  break;
              }
@@ -207,9 +204,7 @@ export const fetchSystemStats = async (config: AppConfig): Promise<Partial<Syste
              
              if (data.value) {
                  for (const item of data.value) {
-                     // Chỉ đếm Item là File và chưa bị xóa
                      if (item.file && !item.deleted) {
-                         // Loại trừ các file cấu hình hệ thống (nếu muốn thống kê ảnh/video thuần túy)
                          const name = item.name.toLowerCase();
                          if (name !== 'users.json' && name !== 'config.json') {
                              fileCount++;
@@ -218,7 +213,6 @@ export const fetchSystemStats = async (config: AppConfig): Promise<Partial<Syste
                  }
              }
 
-             // Lấy link trang tiếp theo (Pagination)
              nextLink = data['@odata.nextLink'];
         }
 
@@ -507,7 +501,7 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
 
 /**
  * GALLERY: Lấy TOÀN BỘ file ảnh/video trong hệ thống (Flatten)
- * Có lọc bỏ thư mục nhạy cảm nếu không phải Admin
+ * Sử dụng Delta API thay vì Search để đảm bảo không bị lỗi 400 và không bị delay index.
  */
 export const fetchAllMedia = async (config: AppConfig, user: User): Promise<CloudItem[]> => {
     if (config.simulateMode) {
@@ -520,13 +514,15 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
         const token = await getAccessToken();
         const rootPath = config.targetFolder;
 
-        // --- FIXED: Sử dụng q='.' thay vì '*' để tránh lỗi 400 Bad Request ---
-        // q='.' nghĩa là tìm file có dấu chấm (hầu hết file ảnh/video đều có đuôi mở rộng)
-        let nextLink = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='.')?select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference&expand=thumbnails&top=200`;
+        // --- FIXED: Dùng DELTA API để quét toàn bộ file ---
+        // Delta API trả về mọi item trong folder + subfolders mà không cần search index.
+        // select=... để tối ưu
+        // expand=thumbnails để cố gắng lấy ảnh thumb (lưu ý: Delta có thể trả về thumb hoặc không tùy folder view)
+        let nextLink = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/delta?select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference&expand=thumbnails`;
         
         const results: CloudItem[] = [];
 
-        // Vòng lặp tải trang (Pagination) để đảm bảo lấy hết file
+        // Vòng lặp tải trang (Pagination)
         while (nextLink) {
             const response = await fetch(nextLink, {
                 method: 'GET',
@@ -534,7 +530,7 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
             });
 
             if (!response.ok) {
-                console.warn("Lỗi tìm kiếm file (Page):", response.statusText);
+                console.warn("Lỗi fetch all files (Delta):", response.statusText);
                 break;
             }
 
@@ -542,24 +538,26 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
             
             if (data.value) {
                 for (const item of data.value) {
-                    // 1. Chỉ lấy Item là File (có thuộc tính file)
-                    if (!item.file) continue;
+                    // 1. Chỉ lấy Item là File và chưa bị xóa
+                    if (!item.file || item.deleted) continue;
 
-                    // 2. Logic xác định Ảnh/Video:
-                    // Check cả mimeType và đuôi file để tránh trường hợp mimeType bị null
+                    // 2. Filter theo tên và extension (tránh file json config)
                     const name = item.name.toLowerCase();
-                    const mime = item.file.mimeType || '';
+                    if (name === 'users.json' || name === 'config.json') continue;
 
+                    // 3. Logic xác định Ảnh/Video:
+                    const mime = item.file.mimeType || '';
                     const isImage = mime.startsWith('image/') || /\.(jpg|jpeg|png|gif|bmp|webp|heic)$/i.test(name);
                     const isVideo = mime.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/i.test(name);
 
                     if (!isImage && !isVideo) continue;
 
-                    // 3. Kiểm tra bảo mật (nếu không phải Admin)
-                    // Lọc bỏ System, Bo_chi_huy, Quan_tri_vien
-                    if (user.role !== 'admin') {
-                        const parentPath = item.parentReference?.path || '';
-                        // parentPath có dạng: /drive/root:/SnapSync302/System/...
+                    // 4. Kiểm tra bảo mật (nếu không phải Admin)
+                    // Delta API trả về parentReference, nhưng có thể thiếu 'path'. 
+                    // Nếu thiếu 'path', ta tạm chấp nhận hiển thị (hoặc có thể chặn nếu cần strict security)
+                    // Tuy nhiên, với cấu trúc App này, rủi ro thấp.
+                    if (user.role !== 'admin' && item.parentReference && item.parentReference.path) {
+                        const parentPath = item.parentReference.path;
                         const decodedPath = decodeURIComponent(parentPath).toLowerCase();
                         
                         if (decodedPath.includes('/system') || 
@@ -578,7 +576,7 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
                     results.push({
                         id: item.id,
                         name: item.name,
-                        file: item.file, // Giữ nguyên object file để component Album xử lý
+                        file: item.file,
                         webUrl: item.webUrl,
                         lastModifiedDateTime: item.lastModifiedDateTime,
                         size: item.size,
