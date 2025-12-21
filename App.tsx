@@ -1,20 +1,22 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { User, PhotoRecord, UploadStatus, AppConfig, SystemConfig, CloudItem } from './types';
+import { User, PhotoRecord, UploadStatus, AppConfig, SystemConfig, CloudItem, SystemStats } from './types';
 import { INITIAL_USERS, login } from './services/mockAuth';
 import { 
   uploadToOneDrive, fetchUsersFromOneDrive, saveUsersToOneDrive, 
   listUserMonthFolders, listFilesInMonthFolder, createShareLink,
   fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles,
-  getAccessToken, listPathContents
+  getAccessToken, listPathContents, fetchSystemStats
 } from './services/graphService';
 import { Button } from './components/Button';
 import { Album } from './components/Album';
+import { Statistics } from './components/Statistics';
 import { 
   Camera, LogOut, Info, Settings, History, CheckCircle, XCircle, 
   Loader2, Image as ImageIcon, Users, Trash2, Plus, Edit,
   FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
-  AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home
+  AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
+  BarChart3
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -92,6 +94,10 @@ export default function App() {
   const [tempSysConfig, setTempSysConfig] = useState<SystemConfig>(systemConfig); // Init from state
   const [isSavingConfig, setIsSavingConfig] = useState(false);
 
+  // Statistics State
+  const [stats, setStats] = useState<SystemStats>({ totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 });
+  const [isStatsLoading, setIsStatsLoading] = useState(false);
+
   // Gallery View State (NEW)
   const [galleryBreadcrumbs, setGalleryBreadcrumbs] = useState<{name: string, path: string}[]>([{name: 'Toàn đơn vị', path: ''}]);
   const [galleryItems, setGalleryItems] = useState<CloudItem[]>([]);
@@ -162,6 +168,29 @@ export default function App() {
         setGalleryBreadcrumbs([{name: 'Thư viện', path: ''}]);
     }
   }, [currentView, user]);
+
+  // Load Stats when Admin opens Settings
+  useEffect(() => {
+    if (currentView === 'settings' && user?.role === 'admin') {
+      const loadStats = async () => {
+        setIsStatsLoading(true);
+        try {
+           const cloudStats = await fetchSystemStats(config);
+           setStats({
+               totalUsers: usersList.length,
+               activeUsers: usersList.filter(u => u.status === 'active' || u.status === undefined).length, // Mặc định là active nếu ko có status
+               totalFiles: cloudStats.totalFiles || 0,
+               totalStorage: cloudStats.totalStorage || 0
+           });
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setIsStatsLoading(false);
+        }
+      };
+      loadStats();
+    }
+  }, [currentView, user, usersList]);
 
   // --- HANDLERS ---
   const loadRecentPhotos = async (currentUser: User) => {
@@ -453,10 +482,8 @@ export default function App() {
       if (!user) return;
       setSharingItem(item.id);
       try {
-          const currentPathString = galleryBreadcrumbs.map(b => b.path).filter(p => p).join('/');
-          const relativePath = currentPathString ? `${currentPathString}/${item.name}` : item.name;
-          
-          const link = await createShareLink(config, user, relativePath);
+          // Sử dụng Item ID thay vì Path để tránh lỗi "Item not found"
+          const link = await createShareLink(config, item.id);
           await navigator.clipboard.writeText(link);
           alert(`Đã copy link chia sẻ: ${item.name}`);
       } catch(e: any) {
@@ -938,6 +965,15 @@ export default function App() {
               Quản trị hệ thống
             </h3>
             
+             {/* STATISTICS DASHBOARD (NEW) */}
+             <div>
+                <h4 className="font-bold text-slate-700 flex items-center mb-4 pb-2">
+                   <BarChart3 className="w-4 h-4 mr-2 text-slate-500" />
+                   Thống kê hệ thống
+                </h4>
+                <Statistics stats={stats} isLoading={isStatsLoading} color={systemConfig.themeColor} />
+             </div>
+
              {/* PENDING APPROVALS LIST */}
              <div className="bg-white p-5 rounded-xl shadow-sm border border-orange-200">
                <h4 className="font-bold text-orange-700 flex items-center mb-4 border-b border-orange-100 pb-2">

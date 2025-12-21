@@ -1,5 +1,5 @@
 
-import { AppConfig, User, SystemConfig, PhotoRecord, UploadStatus, CloudItem } from '../types';
+import { AppConfig, User, SystemConfig, PhotoRecord, UploadStatus, CloudItem, SystemStats } from '../types';
 import { INITIAL_USERS } from './mockAuth';
 
 // Cấu hình mặc định
@@ -166,6 +166,52 @@ export const saveSystemConfig = async (sysConfig: SystemConfig, config: AppConfi
 };
 
 /**
+ * ADMIN: Lấy thống kê hệ thống (Files, Dung lượng)
+ */
+export const fetchSystemStats = async (config: AppConfig): Promise<Partial<SystemStats>> => {
+    if (config.simulateMode) {
+        return { totalFiles: 150, totalStorage: 1024 * 1024 * 500 }; // 500MB Mock
+    }
+
+    try {
+        const token = await getAccessToken();
+        
+        // 1. Lấy thông tin thư mục gốc để biết tổng dung lượng (Size của folder bao gồm con)
+        const rootPath = config.targetFolder;
+        const rootEndpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}`;
+        
+        const rootRes = await fetch(rootEndpoint, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const rootData = await rootRes.json();
+        
+        // 2. Đếm số lượng file (Dùng Search API để quét)
+        // Lưu ý: Search có thể không realtime 100% nhưng là cách tốt nhất để đếm mà không cần duyệt cây đệ quy
+        const searchEndpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='*')?select=id,file,size&top=999`;
+        
+        const searchRes = await fetch(searchEndpoint, {
+             headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const searchData = await searchRes.json();
+        
+        let fileCount = 0;
+        if (searchData.value) {
+            // Lọc những item có thuộc tính 'file'
+            fileCount = searchData.value.filter((item: any) => item.file).length;
+        }
+
+        return {
+            totalStorage: rootData.size || 0,
+            totalFiles: fileCount
+        };
+
+    } catch (e) {
+        console.error("Error fetching stats:", e);
+        return { totalFiles: 0, totalStorage: 0 };
+    }
+};
+
+/**
  * Hàm upload file lên OneDrive
  */
 export const uploadToOneDrive = async (
@@ -315,17 +361,16 @@ export const listFilesInMonthFolder = async (config: AppConfig, user: User, mont
 };
 
 /**
- * SHARE: Tạo link chia sẻ
+ * SHARE: Tạo link chia sẻ bằng Item ID (Chuẩn hơn dùng Path)
  */
-export const createShareLink = async (config: AppConfig, user: User, relativePath: string) => {
+export const createShareLink = async (config: AppConfig, itemId: string) => {
   if (config.simulateMode) return "https://mock-share-link.com";
   
   try {
     const token = await getAccessToken();
-    const unitFolder = user.unit || 'Unknown_Unit';
-    const fullPath = `${config.targetFolder}/${unitFolder}/${user.username}/${relativePath}`;
-
-    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${fullPath}:/createLink`;
+    
+    // Sử dụng endpoint theo ID thay vì Path để tránh lỗi "Item not found" khi path phức tạp
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/createLink`;
 
     const body = { type: 'view', scope: 'anonymous' };
 

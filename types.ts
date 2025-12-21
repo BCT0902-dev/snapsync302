@@ -53,3 +53,10 @@ export interface CloudItem {
   thumbnailUrl?: string; // Link ảnh thumb
   downloadUrl?: string; // Link tải trực tiếp (@microsoft.graph.downloadUrl)
 }
+
+export interface SystemStats {
+  totalUsers: number;
+  activeUsers: number;
+  totalFiles: number;
+  totalStorage: number; // Bytes
+}
