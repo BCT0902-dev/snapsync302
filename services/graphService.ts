@@ -500,79 +500,48 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
 };
 
 /**
- * GALLERY: Lấy TOÀN BỘ file ảnh/video trong hệ thống (Flatten)
- * Sử dụng Delta API thay vì Search để đảm bảo không bị lỗi 400 và không bị delay index.
+ * Helper: Duyệt đệ quy cây thư mục
  */
-export const fetchAllMedia = async (config: AppConfig, user: User): Promise<CloudItem[]> => {
-    if (config.simulateMode) {
-        return [
-            { id: '1', name: 'demo.jpg', file: {mimeType: 'image/jpeg'}, webUrl: '#', lastModifiedDateTime: new Date().toISOString(), size: 1024, thumbnailUrl: 'https://via.placeholder.com/150' } as CloudItem
-        ];
-    }
+const crawlFolderRecursive = async (token: string, folderId: string, results: CloudItem[], user: User) => {
+  try {
+    // Lấy danh sách con của folderId
+    let nextLink = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,parentReference&expand=thumbnails&top=200`;
 
-    try {
-        const token = await getAccessToken();
-        const rootPath = config.targetFolder;
-
-        // --- FIXED: Dùng DELTA API để quét toàn bộ file ---
-        // Delta API trả về mọi item trong folder + subfolders mà không cần search index.
-        // select=... để tối ưu
-        // expand=thumbnails để cố gắng lấy ảnh thumb (lưu ý: Delta có thể trả về thumb hoặc không tùy folder view)
-        let nextLink = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/delta?select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference&expand=thumbnails`;
-        
-        const results: CloudItem[] = [];
-
-        // Vòng lặp tải trang (Pagination)
-        while (nextLink) {
-            const response = await fetch(nextLink, {
-                method: 'GET',
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-
-            if (!response.ok) {
-                console.warn("Lỗi fetch all files (Delta):", response.statusText);
-                break;
+    while (nextLink) {
+      const response = await fetch(nextLink, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (!response.ok) break;
+      
+      const data = await response.json();
+      
+      if (data.value) {
+        // Duyệt tuần tự để an toàn
+        for (const item of data.value) {
+            // Check bảo mật
+            if (user.role !== 'admin') {
+                const name = item.name.toLowerCase();
+                if (name === 'system' || name === 'bo_chi_huy' || name === 'quan_tri_vien') continue;
             }
 
-            const data = await response.json();
-            
-            if (data.value) {
-                for (const item of data.value) {
-                    // 1. Chỉ lấy Item là File và chưa bị xóa
-                    if (!item.file || item.deleted) continue;
+            if (item.folder) {
+                // Đệ quy
+                await crawlFolderRecursive(token, item.id, results, user);
+            } else if (item.file) {
+                // Check file ảnh/video
+                const name = item.name.toLowerCase();
+                if (name === 'users.json' || name === 'config.json') continue;
 
-                    // 2. Filter theo tên và extension (tránh file json config)
-                    const name = item.name.toLowerCase();
-                    if (name === 'users.json' || name === 'config.json') continue;
+                const mime = item.file.mimeType || '';
+                const isImage = mime.startsWith('image/') || /\.(jpg|jpeg|png|gif|bmp|webp|heic)$/i.test(name);
+                const isVideo = mime.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/i.test(name);
 
-                    // 3. Logic xác định Ảnh/Video:
-                    const mime = item.file.mimeType || '';
-                    const isImage = mime.startsWith('image/') || /\.(jpg|jpeg|png|gif|bmp|webp|heic)$/i.test(name);
-                    const isVideo = mime.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/i.test(name);
-
-                    if (!isImage && !isVideo) continue;
-
-                    // 4. Kiểm tra bảo mật (nếu không phải Admin)
-                    // Delta API trả về parentReference, nhưng có thể thiếu 'path'. 
-                    // Nếu thiếu 'path', ta tạm chấp nhận hiển thị (hoặc có thể chặn nếu cần strict security)
-                    // Tuy nhiên, với cấu trúc App này, rủi ro thấp.
-                    if (user.role !== 'admin' && item.parentReference && item.parentReference.path) {
-                        const parentPath = item.parentReference.path;
-                        const decodedPath = decodeURIComponent(parentPath).toLowerCase();
-                        
-                        if (decodedPath.includes('/system') || 
-                            decodedPath.includes('/bo_chi_huy') || 
-                            decodedPath.includes('/quan_tri_vien')) {
-                            continue;
-                        }
-                    }
-
-                    // Map dữ liệu
+                if (isImage || isVideo) {
                     let thumb = "";
                     if (item.thumbnails && item.thumbnails.length > 0) {
                         thumb = item.thumbnails[0].large?.url || item.thumbnails[0].medium?.url || item.thumbnails[0].small?.url;
                     }
-
                     results.push({
                         id: item.id,
                         name: item.name,
@@ -585,15 +554,48 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
                     });
                 }
             }
-            
-            // Chuyển sang trang tiếp theo nếu có
-            nextLink = data['@odata.nextLink'];
         }
+      }
+      nextLink = data['@odata.nextLink'];
+    }
+  } catch (e) {
+    console.error("Crawl error at folder " + folderId, e);
+  }
+}
+
+/**
+ * GALLERY: Lấy TOÀN BỘ file ảnh/video trong hệ thống (Recursive Crawl)
+ * Thay thế phương thức Search/Delta bằng duyệt đệ quy để đảm bảo chính xác 100%.
+ */
+export const fetchAllMedia = async (config: AppConfig, user: User): Promise<CloudItem[]> => {
+    if (config.simulateMode) {
+        return [
+            { id: '1', name: 'demo.jpg', file: {mimeType: 'image/jpeg'}, webUrl: '#', lastModifiedDateTime: new Date().toISOString(), size: 1024, thumbnailUrl: 'https://via.placeholder.com/150' } as CloudItem
+        ];
+    }
+
+    try {
+        const token = await getAccessToken();
+        const rootPath = config.targetFolder;
+
+        // 1. Lấy ID của thư mục gốc trước
+        const rootEndpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}`;
+        const rootRes = await fetch(rootEndpoint, { headers: { 'Authorization': `Bearer ${token}` } });
+        
+        if (!rootRes.ok) throw new Error("Không tìm thấy thư mục gốc");
+        
+        const rootData = await rootRes.json();
+        const rootId = rootData.id;
+
+        const results: CloudItem[] = [];
+        
+        // 2. Bắt đầu duyệt đệ quy từ gốc
+        await crawlFolderRecursive(token, rootId, results, user);
 
         return results;
 
     } catch (error) {
-        console.error("Fetch All Media Error:", error);
+        console.error("Fetch All Media Error (Recursive):", error);
         return [];
     }
 };
