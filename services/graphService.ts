@@ -288,16 +288,23 @@ export const uploadToOneDrive = async (
 
     const token = await getAccessToken();
 
-    // Format: SnapSync302 / [Đơn vị Cấp 1] / [Đơn vị Cấp 2] / ... / T[Tháng]
+    // Format: SnapSync302 / [Đơn vị Cấp 1] / [Đơn vị Cấp 2] / ... / T[Tháng] / [Tuần]
     const now = new Date();
     const currentMonth = (now.getMonth() + 1).toString().padStart(2, '0');
     const monthFolder = `T${currentMonth}`; 
     
+    // Tính toán Tuần (1-4)
+    const day = now.getDate();
+    // Logic: Ngày 1-7 (T1), 8-14 (T2), 15-21 (T3), 22-31 (T4)
+    // Dùng Math.ceil(day/7), max là 4.
+    const weekNum = Math.min(4, Math.ceil(day / 7));
+    const weekFolder = `Tuần_${weekNum}`;
+    
     // Lấy path dựa trên unit (giữ nguyên hierarchy)
     const unitFolder = getUnitFolderName(user.unit);
     
-    // Cấu trúc: Root / Unit Hierarchy / Month / Filename
-    const fullPath = `${config.targetFolder}/${unitFolder}/${monthFolder}`;
+    // Cấu trúc: Root / Unit Hierarchy / Month / Week / Filename
+    const fullPath = `${config.targetFolder}/${unitFolder}/${monthFolder}/${weekFolder}`;
     
     // --- LOGIC ĐỔI TÊN FILE "CHUYÊN NGHIỆP" ---
     // Format: [Username]_[Tên_Gốc_Sanitized]_[Timestamp].[Ext]
@@ -521,6 +528,7 @@ export const renameOneDriveItem = async (config: AppConfig, itemId: string, newN
 /**
  * HISTORY: Lấy danh sách file kèm thumbnails
  * UPDATE: Lấy từ thư mục chung của Unit và lọc theo prefix tên file (Username)
+ * UPDATE V2: Lấy theo Tuần hiện tại
  */
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
   if (config.simulateMode) return [];
@@ -531,11 +539,15 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     const currentMonth = (now.getMonth() + 1).toString().padStart(2, '0');
     const monthFolder = `T${currentMonth}`;
     
+    const day = now.getDate();
+    const weekNum = Math.min(4, Math.ceil(day / 7));
+    const weekFolder = `Tuần_${weekNum}`;
+
     // Sử dụng chung logic thư mục Unit (giữ nguyên hierarchy)
     const unitFolder = getUnitFolderName(user.unit);
     
-    // Path mới: Root / Unit Hierarchy / Month
-    const path = `${config.targetFolder}/${unitFolder}/${monthFolder}`;
+    // Path mới: Root / Unit Hierarchy / Month / Week
+    const path = `${config.targetFolder}/${unitFolder}/${monthFolder}/${weekFolder}`;
     
     // expand=thumbnails để lấy link ảnh thu nhỏ
     const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children?expand=thumbnails`;

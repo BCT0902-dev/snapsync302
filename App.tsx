@@ -18,10 +18,10 @@ import {
   FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
-  BarChart3, Grid, Pencil
+  BarChart3, Grid, Pencil, Eye, EyeOff, Lock
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.1";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
@@ -109,6 +109,9 @@ export default function App() {
   // Share View State (Legacy - keeping for fallback but prioritizing Gallery)
   const [sharingItem, setSharingItem] = useState<string | null>(null); 
   const [downloadingFolderId, setDownloadingFolderId] = useState<string | null>(null);
+  
+  // Action State
+  const [isRenaming, setIsRenaming] = useState<string | null>(null);
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const multiFileInputRef = useRef<HTMLInputElement>(null);
@@ -454,12 +457,25 @@ export default function App() {
     try {
         const items = await listPathContents(config, path);
         
-        // Lọc thư mục nhạy cảm đối với user thường và guest
         let displayItems = items;
         if (user.role !== 'admin') {
-            // Danh sách các folder cần ẩn - UPDATE: Thêm quan_tri_vien
-            const HIDDEN_FOLDERS = ['system', 'bo_chi_huy', 'quan_tri_vien'];
-            displayItems = items.filter(i => !HIDDEN_FOLDERS.includes(i.name.toLowerCase()));
+            // 1. Lọc System và Bộ chỉ huy (Luôn ẩn)
+            const SYSTEM_HIDDEN = ['system', 'bo_chi_huy'];
+            displayItems = items.filter(i => !SYSTEM_HIDDEN.includes(i.name.toLowerCase()));
+
+            // 2. Logic riêng cho folder Quan_tri_vien (Admin uploads)
+            // Nếu đang ở trong thư mục Quan_tri_vien (check path) hoặc item là Quan_tri_vien (check name)
+            
+            // Check xem path hiện tại có nằm trong Quan_tri_vien không
+            const isInAdminFolder = path.toLowerCase().includes('quan_tri_vien');
+            
+            if (isInAdminFolder) {
+                 // Nếu đã ở trong folder Admin -> CHỈ hiện file có prefix PUBLIC_
+                 displayItems = displayItems.filter(i => i.name.startsWith('PUBLIC_'));
+            } else {
+                 // Nếu ở ngoài root -> Vẫn hiện folder "Quan_tri_vien" để user click vào
+                 // Nhưng khi click vào thì logic trên sẽ chạy và lọc hết file không public.
+            }
         }
 
         // Sắp xếp: Folder lên trước, File sau
@@ -570,6 +586,30 @@ export default function App() {
         }
     } catch (e) {
         alert("Có lỗi xảy ra khi đổi tên.");
+    }
+  };
+
+  // ADMIN: Toggle Visibility (Public/Private)
+  const handleToggleVisibility = async (item: CloudItem) => {
+    if (!user || user.role !== 'admin') return;
+    
+    const isPublic = item.name.startsWith('PUBLIC_');
+    const newName = isPublic ? item.name.replace('PUBLIC_', '') : `PUBLIC_${item.name}`;
+    
+    setIsRenaming(item.id);
+    try {
+         const result = await renameOneDriveItem(config, item.id, newName);
+         if (result.success) {
+             // Update local state
+             setGalleryItems(prev => prev.map(i => i.id === item.id ? { ...i, name: newName } : i));
+         } else {
+             alert("Lỗi đổi trạng thái: " + result.error);
+         }
+    } catch(e) {
+         console.error(e);
+         alert("Lỗi kết nối");
+    } finally {
+         setIsRenaming(null);
     }
   };
 
@@ -820,6 +860,9 @@ export default function App() {
   const getHistoryPhotos = () => {
     return photos;
   };
+  
+  // Xác định xem có phải đang ở trong thư mục Admin (Quan_tri_vien) hay không để hiện nút Toggle
+  const isInAdminFolder = galleryBreadcrumbs.some(b => b.path.toLowerCase().includes('quan_tri_vien'));
 
   // --- RENDER ---
   const themeStyle = { backgroundColor: systemConfig.themeColor };
@@ -921,11 +964,11 @@ export default function App() {
                 QUY ĐỊNH BẢO MẬT
               </div>
               <div className="text-slate-700 text-sm space-y-3 leading-relaxed text-justify">
-                <p>Đây là cổng lưu trữ hình ảnh, video cuộc sống thường ngày của quân nhân, chiến sĩ Sư đoàn 302.</p>
+                <p>Đây là cổng thông tin lưu trữ hoạt động của các cơ quan, đơn vị và đời sống của bộ đội.</p>
                 <div className="bg-amber-50 p-3 rounded-lg border border-amber-100 flex gap-2">
                   <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
                   <p className="font-medium text-amber-800">
-                    Vui lòng <strong>KHÔNG</strong> đăng tải các hình ảnh, video có nội dung bí mật quân sự, huấn luyện quân sự, các hình ảnh chống phá Đảng và Nhà nước.
+                    Vui lòng không đăng tải các hình ảnh có độ mật, "lưu hành nội bộ", như: Sơ đồ vị trí đóng quân, các văn kiện huấn luyện, SSCĐ, diễn tập, văn kiện tác chiến, đội hình, chiến thuật, hình ảnh VKTB chưa được phép công bố, hình ảnh làm ảnh hưởng tới phong cách quân nhân.
                   </p>
                 </div>
               </div>
@@ -967,7 +1010,7 @@ export default function App() {
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
               <h3 className="text-lg font-bold mb-2" style={textThemeStyle}>Upload Tài liệu/Đa phương tiện</h3>
               <p className="text-slate-500 text-sm mb-4">
-                Lưu trữ: <code className="bg-slate-100 px-1 rounded text-xs">.../{user.username}/T{(new Date().getMonth() + 1).toString().padStart(2, '0')}</code>
+                Lưu trữ: <code className="bg-slate-100 px-1 rounded text-xs">.../{user.username}/T{(new Date().getMonth() + 1).toString().padStart(2, '0')}/Tuần_{Math.min(4, Math.ceil(new Date().getDate() / 7))}</code>
               </p>
               
               <div className="space-y-3">
@@ -1042,7 +1085,7 @@ export default function App() {
 
         {currentView === 'history' && !isGuest && (
           <div className="space-y-4">
-             <h3 className="font-bold text-slate-800 text-lg mb-4">Lịch sử gửi file (Tháng này)</h3>
+             <h3 className="font-bold text-slate-800 text-lg mb-4">Lịch sử gửi file (Tuần này)</h3>
              {isHistoryLoading ? (
                  <div className="text-center py-12 text-slate-400"><Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" /> Đang tải lịch sử...</div>
              ) : getHistoryPhotos().length === 0 ? (
@@ -1140,16 +1183,38 @@ export default function App() {
                                                 <Folder className="w-6 h-6 text-amber-500 fill-amber-500" />
                                             </div>
                                            <div className="min-w-0">
-                                               <p className="font-bold text-slate-700 text-sm truncate">{item.name}</p>
-                                               <p className="text-[10px] text-slate-400">
-                                                   {item.folder?.childCount} mục • {new Date(item.lastModifiedDateTime).toLocaleDateString()}
-                                               </p>
+                                               <p className="font-bold text-slate-700 text-sm truncate">{item.name.replace('PUBLIC_', '')}</p>
+                                               <div className="flex items-center gap-2">
+                                                   <p className="text-[10px] text-slate-400">
+                                                       {item.folder?.childCount} mục • {new Date(item.lastModifiedDateTime).toLocaleDateString()}
+                                                   </p>
+                                                   {/* Show Public Label for everyone */}
+                                                   {item.name.startsWith('PUBLIC_') && (
+                                                       <span className="text-[9px] bg-green-100 text-green-700 px-1.5 rounded font-bold border border-green-200">Công khai</span>
+                                                   )}
+                                                   {/* Show Lock for Admin if private */}
+                                                   {user.role === 'admin' && !item.name.startsWith('PUBLIC_') && isInAdminFolder && (
+                                                       <Lock className="w-3 h-3 text-slate-400" />
+                                                   )}
+                                               </div>
                                            </div>
                                        </div>
                                        <div className="flex items-center gap-1">
                                            {/* ADMIN Actions */}
                                            {user.role === 'admin' && (
                                                 <>
+                                                    {/* Toggle Visibility (Only inside Admin Folder) */}
+                                                    {isInAdminFolder && (
+                                                        <button 
+                                                            onClick={(e) => { e.stopPropagation(); handleToggleVisibility(item); }}
+                                                            disabled={isRenaming === item.id}
+                                                            className={`p-2 rounded-full ${isRenaming === item.id ? 'opacity-50' : ''} ${item.name.startsWith('PUBLIC_') ? 'text-green-600 hover:bg-green-50' : 'text-slate-400 hover:bg-slate-100'}`}
+                                                            title={item.name.startsWith('PUBLIC_') ? "Đang công khai. Nhấn để ẩn." : "Đang ẩn. Nhấn để công khai."}
+                                                        >
+                                                            {isRenaming === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : item.name.startsWith('PUBLIC_') ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                                                        </button>
+                                                    )}
+
                                                     <button 
                                                         onClick={(e) => { e.stopPropagation(); handleRenameFolder(item); }}
                                                         className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full"
