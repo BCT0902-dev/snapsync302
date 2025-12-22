@@ -573,6 +573,28 @@ export default function App() {
     }
   };
 
+  const handleDeleteFolder = async (item: CloudItem) => {
+    if (!user || user.role !== 'admin') return;
+    
+    // Cảnh báo mạnh cho việc xóa thư mục
+    const confirmMsg = `CẢNH BÁO: Bạn có chắc muốn xóa thư mục "${item.name}"?\nToàn bộ dữ liệu bên trong sẽ bị xóa vĩnh viễn và không thể khôi phục!`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+        const success = await deleteFileFromOneDrive(config, item.id);
+        
+        if (success) {
+            alert(`Đã xóa thư mục ${item.name}`);
+            // Cập nhật UI: Loại bỏ item đã xóa khỏi danh sách hiện tại
+            setGalleryItems(prev => prev.filter(i => i.id !== item.id));
+        } else {
+            alert("Không thể xóa thư mục. Vui lòng kiểm tra lại quyền hạn hoặc thử lại sau.");
+        }
+    } catch (e) {
+        alert("Lỗi hệ thống khi xóa thư mục.");
+    }
+  };
+
   const handleDownloadFolder = async (item: CloudItem) => {
     if (!user) return;
     
@@ -1116,15 +1138,24 @@ export default function App() {
                                            </div>
                                        </div>
                                        <div className="flex items-center gap-1">
-                                           {/* ADMIN Rename Button */}
+                                           {/* ADMIN Actions */}
                                            {user.role === 'admin' && (
-                                                <button 
-                                                    onClick={(e) => { e.stopPropagation(); handleRenameFolder(item); }}
-                                                    className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full"
-                                                    title="Đổi tên"
-                                                >
-                                                    <Pencil className="w-4 h-4" />
-                                                </button>
+                                                <>
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); handleRenameFolder(item); }}
+                                                        className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full"
+                                                        title="Đổi tên"
+                                                    >
+                                                        <Pencil className="w-4 h-4" />
+                                                    </button>
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); handleDeleteFolder(item); }}
+                                                        className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-full"
+                                                        title="Xóa thư mục"
+                                                    >
+                                                        <Trash2 className="w-4 h-4" />
+                                                    </button>
+                                                </>
                                            )}
 
                                            <button 
