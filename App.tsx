@@ -5,7 +5,7 @@ import { INITIAL_USERS, login } from './services/mockAuth';
 import { 
   uploadToOneDrive, fetchUsersFromOneDrive, saveUsersToOneDrive, 
   listUserMonthFolders, listFilesInMonthFolder, createShareLink,
-  fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles,
+  fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles, fetchUserDeletedItems,
   getAccessToken, listPathContents, fetchSystemStats, fetchAllMedia, deleteFileFromOneDrive,
   renameOneDriveItem, aggregateUserStats
 } from './services/graphService';
@@ -18,10 +18,10 @@ import {
   FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
-  BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator
+  BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.2";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.3";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
@@ -84,8 +84,10 @@ export default function App() {
   // Views: camera, history, gallery, settings, user-manager
   const [currentView, setCurrentView] = useState<'camera' | 'history' | 'gallery' | 'settings' | 'user-manager'>('camera');
   const [photos, setPhotos] = useState<PhotoRecord[]>([]);
+  const [deletedPhotos, setDeletedPhotos] = useState<PhotoRecord[]>([]); // New: Deleted Items
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [historyTab, setHistoryTab] = useState<'uploads' | 'deleted'>('uploads'); // History Tabs
   
   // User Management State
   const [isEditingUser, setIsEditingUser] = useState(false);
@@ -212,8 +214,13 @@ export default function App() {
   const loadRecentPhotos = async (currentUser: User) => {
     setIsHistoryLoading(true);
     try {
-      const records = await fetchUserRecentFiles(config, currentUser);
-      setPhotos(records);
+      // Load Uploads (2 Months)
+      const uploads = await fetchUserRecentFiles(config, currentUser);
+      setPhotos(uploads);
+      
+      // Load Deleted (Recycle Bin)
+      const deleted = await fetchUserDeletedItems(config, currentUser);
+      setDeletedPhotos(deleted);
     } catch (e) {
       console.error("Failed to load recent files", e);
     } finally {
@@ -459,14 +466,11 @@ export default function App() {
     if (!user) return;
     setIsGalleryLoading(true);
     try {
-        const items = await listPathContents(config, path);
+        // Updated to pass 'user' to handle allowedPaths
+        const items = await listPathContents(config, path, user);
         
         let displayItems = items;
         if (user.role !== 'admin') {
-            // 1. Lọc System và Bộ chỉ huy (Luôn ẩn)
-            const SYSTEM_HIDDEN = ['system', 'bo_chi_huy'];
-            displayItems = items.filter(i => !SYSTEM_HIDDEN.includes(i.name.toLowerCase()));
-
             // 2. Logic riêng cho folder Quan_tri_vien (Admin uploads)
             const isInAdminFolder = path.toLowerCase().includes('quan_tri_vien');
             if (isInAdminFolder) {
@@ -912,13 +916,21 @@ export default function App() {
     setIsSavingUser(true);
     let newList = [...usersList];
     if (editingUser.id) {
-      newList = newList.map(u => u.id === editingUser.id ? { ...u, ...editingUser } as User : u);
+        // Cập nhật existing user, convert allowedPaths string to array if needed
+        const updatedUser = { ...editingUser };
+        // Clean up allowed paths if user typed string
+        if (typeof updatedUser.allowedPaths === 'string') {
+            // @ts-ignore
+            updatedUser.allowedPaths = updatedUser.allowedPaths.split(',').map(s => s.trim()).filter(s => s);
+        }
+        newList = newList.map(u => u.id === editingUser.id ? { ...u, ...updatedUser } as User : u);
     } else {
       if (newList.some(u => u.username.toLowerCase() === editingUser.username?.toLowerCase())) {
         alert("Tên đăng nhập đã tồn tại!");
         setIsSavingUser(false);
         return;
       }
+      
       const newUser: User = {
         id: Date.now().toString(),
         username: editingUser.username,
@@ -926,7 +938,9 @@ export default function App() {
         displayName: editingUser.displayName,
         unit: editingUser.unit,
         role: 'staff',
-        status: 'active' // Admin tạo thì active luôn
+        status: 'active',
+        // @ts-ignore
+        allowedPaths: editingUser.allowedPaths ? editingUser.allowedPaths.split(',').map(s => s.trim()).filter(s => s) : []
       } as User;
       newList.push(newUser);
     }
@@ -942,7 +956,10 @@ export default function App() {
   };
 
   const startEditUser = (u?: User) => {
-    setEditingUser(u || { role: 'staff' });
+    // Flatten array to comma string for input
+    const editData = u ? { ...u, allowedPaths: u.allowedPaths?.join(', ') } : { role: 'staff' };
+    // @ts-ignore
+    setEditingUser(editData);
     setIsEditingUser(true);
   };
 
@@ -962,9 +979,12 @@ export default function App() {
     return photos.filter(p => p.timestamp >= oneWeekAgo);
   };
 
-  // Lọc cho trang History: Toàn bộ (đã fetch theo tháng ở service)
-  const getHistoryPhotos = () => {
-    return photos;
+  // Lọc cho trang History
+  const getDisplayHistoryPhotos = () => {
+    if (historyTab === 'deleted') {
+        return deletedPhotos;
+    }
+    return photos; // 2 Months Uploads
   };
   
   // Xác định xem có phải đang ở trong thư mục Admin (Quan_tri_vien) hay không để hiện nút Toggle
@@ -1191,26 +1211,59 @@ export default function App() {
 
         {currentView === 'history' && !isGuest && (
           <div className="space-y-4">
-             <h3 className="font-bold text-slate-800 text-lg mb-4">Lịch sử gửi file (Tuần này)</h3>
+             <h3 className="font-bold text-slate-800 text-lg mb-2">Lịch sử hoạt động</h3>
+             
+             {/* History Tabs */}
+             <div className="flex bg-slate-100 rounded-lg p-1 mb-4">
+                 <button 
+                    onClick={() => setHistoryTab('uploads')}
+                    className={`flex-1 py-2 rounded-md text-xs font-bold transition-all ${historyTab === 'uploads' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}
+                 >
+                     Đã tải lên (2 tháng)
+                 </button>
+                 <button 
+                    onClick={() => setHistoryTab('deleted')}
+                    className={`flex-1 py-2 rounded-md text-xs font-bold transition-all ${historyTab === 'deleted' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-500'}`}
+                 >
+                     Đã xóa
+                 </button>
+             </div>
+
              {isHistoryLoading ? (
                  <div className="text-center py-12 text-slate-400"><Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" /> Đang tải lịch sử...</div>
-             ) : getHistoryPhotos().length === 0 ? (
-                 <p className="text-slate-500 text-center">Trống</p>
+             ) : getDisplayHistoryPhotos().length === 0 ? (
+                 <p className="text-slate-500 text-center py-8">Không có dữ liệu.</p>
              ) : (
-                 getHistoryPhotos().map((photo) => (
+                 getDisplayHistoryPhotos().map((photo) => (
                   <div key={photo.id} className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center">
-                     <PhotoPreview record={photo} />
+                     {/* Show deleted icon if tab deleted */}
+                     {historyTab === 'deleted' ? (
+                         <div className="w-16 h-16 flex items-center justify-center bg-red-50 rounded-lg border border-red-100 flex-shrink-0">
+                             <Trash2 className="w-6 h-6 text-red-400" />
+                         </div>
+                     ) : (
+                         <PhotoPreview record={photo} />
+                     )}
+                     
                      <div className="ml-3 flex-1 min-w-0">
                        <p className="text-sm font-medium text-slate-800 truncate">{photo.fileName}</p>
                        <div className="flex justify-between items-center mt-1">
                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                            historyTab === 'deleted' ? 'bg-red-100 text-red-700' :
                             photo.status === UploadStatus.SUCCESS ? 'bg-green-100 text-green-700' :
                             photo.status === UploadStatus.UPLOADING ? 'bg-blue-100 text-blue-700' :
                             'bg-red-100 text-red-700'
                          }`}>
-                           {photo.status === UploadStatus.SUCCESS ? 'THÀNH CÔNG' : photo.status === UploadStatus.UPLOADING ? 'ĐANG GỬI' : 'LỖI'}
+                           {historyTab === 'deleted' ? 'ĐÃ XÓA' : 
+                            photo.status === UploadStatus.SUCCESS ? 'THÀNH CÔNG' : 
+                            photo.status === UploadStatus.UPLOADING ? 'ĐANG GỬI' : 'LỖI'}
                          </span>
-                         <span className="text-xs text-slate-400">{photo.timestamp.toLocaleDateString('vi-VN')} {photo.timestamp.toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'})}</span>
+                         <span className="text-xs text-slate-400">
+                             {historyTab === 'deleted' && photo.deletedDate ? 
+                                `Xóa: ${photo.deletedDate.toLocaleDateString('vi-VN')}` : 
+                                `${photo.timestamp.toLocaleDateString('vi-VN')} ${photo.timestamp.toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'})}`
+                             }
+                         </span>
                        </div>
                      </div>
                   </div>
@@ -1576,6 +1629,22 @@ export default function App() {
                       <input className="w-full text-sm p-2 border rounded" placeholder="Password" value={editingUser.password || ''} onChange={e => setEditingUser({...editingUser, password: e.target.value})} />
                       <input className="w-full text-sm p-2 border rounded" placeholder="Đơn vị" list="unit-options" value={editingUser.unit || ''} onChange={e => setEditingUser({...editingUser, unit: e.target.value})} />
                       <datalist id="unit-options">{UNIT_SUGGESTIONS.map((unit, idx) => (<option key={idx} value={unit} />))}</datalist>
+                      
+                      {/* Permission Field: Allowed Paths */}
+                      <div className="pt-2 border-t border-slate-200">
+                          <label className="block text-xs font-bold text-slate-500 mb-1">Thư mục được phép xem thêm (phân cách dấu phẩy)</label>
+                          <input 
+                            className="w-full text-sm p-2 border rounded bg-slate-50" 
+                            placeholder="Ví dụ: Trung đoàn 88, Tieu_doan_4" 
+                            // @ts-ignore: displaying array as string for input
+                            value={editingUser.allowedPaths || ''} 
+                            onChange={e => setEditingUser({...editingUser, allowedPaths: e.target.value as any})} 
+                          />
+                          <p className="text-[10px] text-slate-400 mt-1">
+                              Cho phép user này xem các thư mục không thuộc đơn vị của họ.
+                          </p>
+                      </div>
+
                       <div className="flex gap-2 mt-2">
                         <Button type="submit" disabled={isSavingUser} className="py-2 text-sm flex-1" style={buttonStyle}>{isSavingUser ? 'Đang lưu...' : 'Lưu'}</Button>
                         <Button type="button" variant="secondary" className="py-2 text-sm" onClick={() => setIsEditingUser(false)}>Hủy</Button>
@@ -1599,6 +1668,13 @@ export default function App() {
                                      </div>
                                      <p className="text-xs text-slate-500 truncate mt-0.5">{u.unit.split('/').slice(-1)[0].replace('Bo_chi_huy', 'Quan_tri_vien')}</p>
                                      <p className="text-xs text-slate-400 font-mono mt-0.5">{u.username}</p>
+                                     {u.allowedPaths && u.allowedPaths.length > 0 && (
+                                         <div className="mt-1 flex flex-wrap gap-1">
+                                             {u.allowedPaths.map((path, i) => (
+                                                 <span key={i} className="text-[9px] bg-indigo-50 text-indigo-700 px-1 rounded border border-indigo-100">{path}</span>
+                                             ))}
+                                         </div>
+                                     )}
                                  </div>
                                  <div className="flex flex-col items-end gap-2">
                                     <div className="flex gap-1">

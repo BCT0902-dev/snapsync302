@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { CloudItem, User } from '../types';
-import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle, Trash2, CheckSquare, Square } from 'lucide-react';
+import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle, Trash2, CheckSquare, Square, Eye } from 'lucide-react';
 
 interface AlbumProps {
   items: CloudItem[];
@@ -176,6 +176,18 @@ export const Album: React.FC<AlbumProps> = ({
                       {isSelected ? <CheckSquare className="w-4 h-4 text-white" /> : <Square className="w-4 h-4 text-white/80" />}
                   </div>
               )}
+              
+              {/* Stats Overlay (Góc dưới trái) */}
+              <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black/70 to-transparent p-1 pt-4 flex items-center justify-between text-[8px] text-white/90">
+                  <div className="flex items-center gap-1 pl-1">
+                      <Eye className="w-2.5 h-2.5" />
+                      <span>{item.views || 0}</span>
+                  </div>
+                  <div className="flex items-center gap-1 pr-1">
+                      <Download className="w-2.5 h-2.5" />
+                      <span>{item.downloads || 0}</span>
+                  </div>
+              </div>
             </div>
           );
         })}
@@ -191,6 +203,11 @@ export const Album: React.FC<AlbumProps> = ({
                   <p className="text-xs text-white/60">{(selectedItem.size / 1024 / 1024).toFixed(2)} MB • {new Date(selectedItem.lastModifiedDateTime).toLocaleDateString()}</p>
               </div>
               <div className="flex gap-4 shrink-0 items-center">
+                  <div className="flex items-center gap-2 text-xs text-white/70 mr-2 hidden sm:flex">
+                      <span className="flex items-center"><Eye className="w-4 h-4 mr-1" /> {selectedItem.views || 0}</span>
+                      <span className="flex items-center ml-2"><Download className="w-4 h-4 mr-1" /> {selectedItem.downloads || 0}</span>
+                  </div>
+
                   {onDelete && canDelete && (
                       <button 
                         onClick={handleDelete}

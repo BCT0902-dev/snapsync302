@@ -7,6 +7,7 @@ export interface User {
   displayName: string;
   unit: string; // Đơn vị công tác
   status?: 'active' | 'pending'; // Trạng thái tài khoản
+  allowedPaths?: string[]; // Danh sách tên thư mục/đơn vị khác được phép xem
   // Thống kê sử dụng (Optional - được tính toán runtime)
   usageStats?: {
     fileCount: number;
@@ -33,6 +34,9 @@ export interface PhotoRecord {
   size?: number;
   mimeType?: string; // Thêm mimeType để nhận biết video/ảnh
   progress?: number; // % Tiến trình upload (0-100)
+  deletedDate?: Date; // Cho lịch sử xóa
+  views?: number; // Mock view count
+  downloads?: number; // Mock download count
 }
 
 export interface AppConfig {
@@ -58,6 +62,8 @@ export interface CloudItem {
   size: number;
   thumbnailUrl?: string; // Link ảnh thumb
   downloadUrl?: string; // Link tải trực tiếp (@microsoft.graph.downloadUrl)
+  views?: number;
+  downloads?: number;
 }
 
 export interface SystemStats {
