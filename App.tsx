@@ -21,7 +21,7 @@ import {
   BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.3";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.4";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
@@ -614,6 +614,37 @@ export default function App() {
       setIsGalleryLoading(false);
   };
 
+  // Bulk Toggle Visibility (Public/Hidden) - Admin only
+  const handleBulkToggleVisibility = async () => {
+      if (user?.role !== 'admin') return;
+      const itemsToToggle = galleryItems.filter(i => selectedGalleryIds.has(i.id));
+      if (itemsToToggle.length === 0) return;
+
+      if (!confirm(`Bạn có muốn thay đổi trạng thái hiển thị cho ${itemsToToggle.length} mục đã chọn?`)) return;
+
+      setIsGalleryLoading(true);
+      let count = 0;
+      for (const item of itemsToToggle) {
+          // Toggle logic: If starts with PUBLIC_, remove it. If not, add it.
+          const isPublic = item.name.startsWith('PUBLIC_');
+          const newName = isPublic ? item.name.replace('PUBLIC_', '') : `PUBLIC_${item.name}`;
+          
+          try {
+              const res = await renameOneDriveItem(config, item.id, newName);
+              if (res.success) count++;
+          } catch(e) { console.error(e); }
+          // Delay to prevent rate limiting
+          await new Promise(r => setTimeout(r, 200));
+      }
+
+      alert(`Đã cập nhật trạng thái ${count}/${itemsToToggle.length} mục.`);
+      
+      // Refresh current folder
+      const currentPath = galleryBreadcrumbs.map(b => b.path).filter(p => p && p !== 'ALL_MEDIA_SPECIAL_KEY').join('/');
+      loadGalleryPath(currentPath);
+      setSelectedGalleryIds(new Set()); // Clear selection
+  };
+
 
   const handleBreadcrumbClick = (index: number) => {
       const targetCrumb = galleryBreadcrumbs[index];
@@ -916,14 +947,8 @@ export default function App() {
     setIsSavingUser(true);
     let newList = [...usersList];
     if (editingUser.id) {
-        // Cập nhật existing user, convert allowedPaths string to array if needed
-        const updatedUser = { ...editingUser };
-        // Clean up allowed paths if user typed string
-        if (typeof updatedUser.allowedPaths === 'string') {
-            // @ts-ignore
-            updatedUser.allowedPaths = updatedUser.allowedPaths.split(',').map(s => s.trim()).filter(s => s);
-        }
-        newList = newList.map(u => u.id === editingUser.id ? { ...u, ...updatedUser } as User : u);
+        // Cập nhật existing user
+        newList = newList.map(u => u.id === editingUser.id ? { ...u, ...editingUser } as User : u);
     } else {
       if (newList.some(u => u.username.toLowerCase() === editingUser.username?.toLowerCase())) {
         alert("Tên đăng nhập đã tồn tại!");
@@ -939,8 +964,8 @@ export default function App() {
         unit: editingUser.unit,
         role: 'staff',
         status: 'active',
-        // @ts-ignore
-        allowedPaths: editingUser.allowedPaths ? editingUser.allowedPaths.split(',').map(s => s.trim()).filter(s => s) : []
+        // allowedPaths removed as per new instruction
+        allowedPaths: []
       } as User;
       newList.push(newUser);
     }
@@ -956,10 +981,7 @@ export default function App() {
   };
 
   const startEditUser = (u?: User) => {
-    // Flatten array to comma string for input
-    const editData = u ? { ...u, allowedPaths: u.allowedPaths?.join(', ') } : { role: 'staff' };
-    // @ts-ignore
-    setEditingUser(editData);
+    setEditingUser(u || { role: 'staff' });
     setIsEditingUser(true);
   };
 
@@ -1090,7 +1112,7 @@ export default function App() {
                 QUY ĐỊNH BẢO MẬT
               </div>
               <div className="text-slate-700 text-sm space-y-3 leading-relaxed text-justify">
-                <p>Đây là cổng thông tin lưu trữ hoạt động của các cơ quan, đơn vị và đời sống của bộ đội.</p>
+                <p>Đây là cổng thông tin lưu trữ hoạt động của các cơ quan, đơn vị và đời sống của bộ đội Sư đoàn 302.</p>
                 <div className="bg-amber-50 p-3 rounded-lg border border-amber-100 flex gap-2">
                   <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
                   <p className="font-medium text-amber-800">
@@ -1369,18 +1391,6 @@ export default function App() {
                                            {/* ADMIN Actions */}
                                            {user.role === 'admin' && (
                                                 <>
-                                                    {/* Toggle Visibility (Only inside Admin Folder) */}
-                                                    {isInAdminFolder && (
-                                                        <button 
-                                                            onClick={(e) => { e.stopPropagation(); handleToggleVisibility(item); }}
-                                                            disabled={isRenaming === item.id}
-                                                            className={`p-2 rounded-full ${isRenaming === item.id ? 'opacity-50' : ''} ${item.name.startsWith('PUBLIC_') ? 'text-green-600 hover:bg-green-50' : 'text-slate-400 hover:bg-slate-100'}`}
-                                                            title={item.name.startsWith('PUBLIC_') ? "Đang công khai. Nhấn để ẩn." : "Đang ẩn. Nhấn để công khai."}
-                                                        >
-                                                            {isRenaming === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : item.name.startsWith('PUBLIC_') ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-                                                        </button>
-                                                    )}
-
                                                     <button 
                                                         onClick={(e) => { e.stopPropagation(); handleRenameFolder(item); }}
                                                         className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full"
@@ -1432,6 +1442,17 @@ export default function App() {
                         <span className="text-sm font-medium text-slate-700">Đã chọn</span>
                     </div>
                     <div className="flex gap-2">
+                         {/* ADMIN ONLY: Public/Hidden Button */}
+                         {user.role === 'admin' && (
+                             <button 
+                                onClick={handleBulkToggleVisibility} 
+                                className="bg-amber-50 text-amber-600 px-3 py-2 rounded-lg font-bold text-xs flex items-center hover:bg-amber-100"
+                                title="Bật/Tắt hiển thị công khai"
+                             >
+                                <Eye className="w-4 h-4" />
+                             </button>
+                         )}
+
                          <button 
                             onClick={handleBulkDownload} 
                             className="bg-blue-50 text-blue-600 px-3 py-2 rounded-lg font-bold text-xs flex items-center hover:bg-blue-100"
@@ -1630,21 +1651,6 @@ export default function App() {
                       <input className="w-full text-sm p-2 border rounded" placeholder="Đơn vị" list="unit-options" value={editingUser.unit || ''} onChange={e => setEditingUser({...editingUser, unit: e.target.value})} />
                       <datalist id="unit-options">{UNIT_SUGGESTIONS.map((unit, idx) => (<option key={idx} value={unit} />))}</datalist>
                       
-                      {/* Permission Field: Allowed Paths */}
-                      <div className="pt-2 border-t border-slate-200">
-                          <label className="block text-xs font-bold text-slate-500 mb-1">Thư mục được phép xem thêm (phân cách dấu phẩy)</label>
-                          <input 
-                            className="w-full text-sm p-2 border rounded bg-slate-50" 
-                            placeholder="Ví dụ: Trung đoàn 88, Tieu_doan_4" 
-                            // @ts-ignore: displaying array as string for input
-                            value={editingUser.allowedPaths || ''} 
-                            onChange={e => setEditingUser({...editingUser, allowedPaths: e.target.value as any})} 
-                          />
-                          <p className="text-[10px] text-slate-400 mt-1">
-                              Cho phép user này xem các thư mục không thuộc đơn vị của họ.
-                          </p>
-                      </div>
-
                       <div className="flex gap-2 mt-2">
                         <Button type="submit" disabled={isSavingUser} className="py-2 text-sm flex-1" style={buttonStyle}>{isSavingUser ? 'Đang lưu...' : 'Lưu'}</Button>
                         <Button type="button" variant="secondary" className="py-2 text-sm" onClick={() => setIsEditingUser(false)}>Hủy</Button>
@@ -1668,13 +1674,6 @@ export default function App() {
                                      </div>
                                      <p className="text-xs text-slate-500 truncate mt-0.5">{u.unit.split('/').slice(-1)[0].replace('Bo_chi_huy', 'Quan_tri_vien')}</p>
                                      <p className="text-xs text-slate-400 font-mono mt-0.5">{u.username}</p>
-                                     {u.allowedPaths && u.allowedPaths.length > 0 && (
-                                         <div className="mt-1 flex flex-wrap gap-1">
-                                             {u.allowedPaths.map((path, i) => (
-                                                 <span key={i} className="text-[9px] bg-indigo-50 text-indigo-700 px-1 rounded border border-indigo-100">{path}</span>
-                                             ))}
-                                         </div>
-                                     )}
                                  </div>
                                  <div className="flex flex-col items-end gap-2">
                                     <div className="flex gap-1">
