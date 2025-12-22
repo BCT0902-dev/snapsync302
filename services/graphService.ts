@@ -265,36 +265,42 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     const token = await getAccessToken();
     const now = new Date();
     
-    // Logic tháng hiện tại và tháng trước
-    const monthNames = [];
-    
-    // Tháng hiện tại
-    const currentMonthNum = now.getMonth() + 1;
-    monthNames.push(`T${currentMonthNum.toString().padStart(2, '0')}`);
-    
-    // Tháng trước
-    let prevMonthNum = currentMonthNum - 1;
-    if (prevMonthNum === 0) prevMonthNum = 12; // Nếu T1 thì tháng trước là T12
-    monthNames.push(`T${prevMonthNum.toString().padStart(2, '0')}`);
+    // 1. Xác định các đường dẫn cần quét
+    const pathsToCheck: string[] = [];
 
-    const unitFolder = getUnitFolderName(user.unit);
+    // Path A: Thư mục cá nhân (Tháng hiện tại + Tháng trước)
+    const currentMonthNum = now.getMonth() + 1;
+    const prevMonthNum = currentMonthNum === 1 ? 12 : currentMonthNum - 1;
     
-    // Hàm fetch đệ quy đơn giản cho 1 folder tháng (quét cả subfolder Tuan_X)
-    const fetchFilesForMonth = async (monthName: string): Promise<any[]> => {
-        // Search query để tìm file trong folder tháng
+    const monthNames = [
+        `T${currentMonthNum.toString().padStart(2, '0')}`,
+        `T${prevMonthNum.toString().padStart(2, '0')}`
+    ];
+    
+    const unitFolder = getUnitFolderName(user.unit);
+    monthNames.forEach(m => {
+        pathsToCheck.push(`${config.targetFolder}/${unitFolder}/${m}`);
+    });
+
+    // Path B: Thư mục Tư liệu chung
+    pathsToCheck.push(`${config.targetFolder}/Tu_lieu_chung`);
+    
+    // Hàm fetch đệ quy đơn giản cho 1 folder path
+    const fetchFilesFromPath = async (searchPath: string): Promise<any[]> => {
+        // Search query để tìm file trong folder
         // Lưu ý: OneDrive Search scope có thể rộng, nên cần filter kỹ
-        const searchPath = `${config.targetFolder}/${unitFolder}/${monthName}`;
         const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${searchPath}:/search(q='')?select=id,name,webUrl,createdDateTime,size,file,parentReference&expand=thumbnails`;
         
         try {
             const res = await fetch(endpoint, { headers: { 'Authorization': `Bearer ${token}` } });
-            if (!res.ok) return []; // Folder có thể chưa tồn tại
+            if (!res.ok) return []; // Folder có thể chưa tồn tại (ví dụ: tháng mới chưa upload gì, hoặc chưa có thư mục chung)
             const data = await res.json();
             return data.value || [];
         } catch { return []; }
     };
 
-    const results = await Promise.all(monthNames.map(m => fetchFilesForMonth(m)));
+    // Chạy song song tất cả các request
+    const results = await Promise.all(pathsToCheck.map(p => fetchFilesFromPath(p)));
     const allFiles = results.flat();
 
     const userPrefix = `${user.username}_`;
@@ -322,7 +328,10 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
         };
       });
 
-    return records.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+    // Loại bỏ trùng lặp (nếu search trả về trùng do index)
+    const uniqueRecords = Array.from(new Map(records.map(item => [item.id, item])).values());
+
+    return uniqueRecords.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
   } catch (error) {
     console.error("Fetch Recent Files Error:", error);
