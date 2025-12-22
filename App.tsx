@@ -21,7 +21,7 @@ import {
   BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.4";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 

@@ -409,19 +409,18 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
             
             items = items.filter((i: CloudItem) => {
                 // 1. Cho phép folder chứa đơn vị của user (Logic cũ)
-                // Vì cấu trúc Unit là "Sư đoàn/Phòng...", nên Root của user là folder cấp 1 (Sư đoàn, Trung đoàn...)
-                // Tuy nhiên, logic folder là "Trung đoàn 88/Ban Tham Mưu". 
-                // getUnitFolderName trả về full path.
-                // Ở màn hình root, ta thấy các folder cấp 1.
-                
-                // Logic đơn giản:
-                // Folder đó có phải là một phần của Unit User không?
                 const isUserUnit = user.unit.includes(i.name);
                 
-                // 2. Cho phép folder nằm trong allowedPaths
+                // 2. Cho phép folder nằm trong allowedPaths (Legacy - nếu vẫn còn dùng)
                 const isAllowed = user.allowedPaths?.some(path => path.includes(i.name) || i.name.includes(path));
                 
-                return isUserUnit || isAllowed;
+                // 3. NEW: Cho phép folder bắt đầu bằng PUBLIC_
+                const isPublic = i.name.startsWith('PUBLIC_');
+
+                // 4. NEW: Cho phép nhìn thấy folder Quan_tri_vien để vào xem nội dung public bên trong
+                const isAdminFolder = i.name === 'Quan_tri_vien';
+                
+                return isUserUnit || isAllowed || isPublic || isAdminFolder;
             });
         }
     }
