@@ -134,7 +134,13 @@ export const fetchSystemStats = async (config: AppConfig): Promise<Partial<Syste
     } catch (e) { return { totalFiles: 0, totalStorage: 0 }; }
 };
 
-export const uploadToOneDrive = async (file: File, config: AppConfig, user: User | null, onProgress?: (percent: number) => void): Promise<{ success: boolean; url?: string; error?: string }> => {
+export const uploadToOneDrive = async (
+    file: File, 
+    config: AppConfig, 
+    user: User | null, 
+    onProgress?: (percent: number) => void,
+    destination: 'personal' | 'common' = 'personal' // Add destination parameter
+): Promise<{ success: boolean; url?: string; error?: string }> => {
   if (config.simulateMode) {
     if (onProgress) onProgress(0);
     return new Promise((resolve) => {
@@ -145,13 +151,23 @@ export const uploadToOneDrive = async (file: File, config: AppConfig, user: User
     if (!user) throw new Error("Chưa đăng nhập");
     const token = await getAccessToken();
     const now = new Date();
-    const currentMonth = (now.getMonth() + 1).toString().padStart(2, '0');
-    const monthFolder = `T${currentMonth}`; 
-    const day = now.getDate();
-    const weekNum = Math.min(4, Math.ceil(day / 7));
-    const weekFolder = `Tuần_${weekNum}`;
-    const unitFolder = getUnitFolderName(user.unit);
-    const fullPath = `${config.targetFolder}/${unitFolder}/${monthFolder}/${weekFolder}`;
+    
+    let fullPath = "";
+    
+    // Logic xác định đường dẫn dựa trên điểm đến
+    if (destination === 'common') {
+        // Upload vào thư mục "Tu_lieu_chung"
+        fullPath = `${config.targetFolder}/Tu_lieu_chung`;
+    } else {
+        // Upload vào thư mục cá nhân (mặc định)
+        const currentMonth = (now.getMonth() + 1).toString().padStart(2, '0');
+        const monthFolder = `T${currentMonth}`; 
+        const day = now.getDate();
+        const weekNum = Math.min(4, Math.ceil(day / 7));
+        const weekFolder = `Tuần_${weekNum}`;
+        const unitFolder = getUnitFolderName(user.unit);
+        fullPath = `${config.targetFolder}/${unitFolder}/${monthFolder}/${weekFolder}`;
+    }
     
     const parts = file.name.split('.');
     const ext = parts.length > 1 ? parts.pop() : '';
@@ -403,33 +419,18 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
         items = items.filter((i: CloudItem) => !SYSTEM_HIDDEN.includes(i.name.toLowerCase()));
 
         if (relativePath === "") {
-            // Root Level: User sees their own Unit + PUBLIC folders + Quan_tri_vien
+            // Root Level: User sees their own Unit + Tu_lieu_chung folders + Quan_tri_vien
             items = items.filter((i: CloudItem) => {
+                const name = i.name.toLowerCase();
                 const isUserUnit = user.unit.includes(i.name);
-                const isPublic = i.name.startsWith('PUBLIC_');
-                const isAdminFolder = i.name === 'Quan_tri_vien';
+                // "Tu_lieu_chung" và "Quan_tri_vien" luôn hiển thị với mọi user
+                const isCommonFolder = name === 'tu_lieu_chung' || name === 'quan_tri_vien';
                 
-                return isUserUnit || isPublic || isAdminFolder;
+                return isUserUnit || isCommonFolder;
             });
-        } else {
-            // Subfolder Level:
-            // Khi user đang ở trong một nhánh thư mục "Shared" (PUBLIC_ hoặc Quan_tri_vien),
-            // họ chỉ được phép thấy các item con NẾU item đó CŨNG ĐƯỢC đánh dấu là PUBLIC_.
-            
-            // Lấy tên thư mục gốc của đường dẫn hiện tại để xác định đang ở cây nào
-            const pathParts = relativePath.split('/');
-            const rootDir = pathParts[0]; // Thư mục gốc nhất (ví dụ: PUBLIC_ThuVien hoặc Quan_tri_vien)
-            
-            // Kiểm tra xem có đang ở trong cây thư mục chia sẻ không
-            // Lưu ý: Folder đơn vị riêng của user không tính là "Shared Tree", họ thấy full trong đó.
-            const isSharedTree = rootDir.startsWith('PUBLIC_') || rootDir === 'Quan_tri_vien';
-            
-            if (isSharedTree) {
-                 // STRICT MODE: Trong vùng chia sẻ, MỌI THỨ phải có tag PUBLIC_ mới được hiện
-                 // FIX ERROR: Explicitly type 'i' as CloudItem to avoid implicit any
-                 items = items.filter((i: CloudItem) => i.name.startsWith('PUBLIC_'));
-            }
         }
+        // Ở cấp độ subfolder: User nhìn thấy hết nội dung bên trong (kể cả trong Tu_lieu_chung)
+        // mà không cần kiểm tra PUBLIC_ hay logic phức tạp nữa.
     }
 
     return items;

@@ -18,7 +18,7 @@ import {
   FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
-  BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock
+  BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock, Globe
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -89,6 +89,9 @@ export default function App() {
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [historyTab, setHistoryTab] = useState<'uploads' | 'deleted'>('uploads'); // History Tabs
   
+  // Upload Options State
+  const [uploadDestination, setUploadDestination] = useState<'personal' | 'common'>('personal');
+
   // User Management State
   const [isEditingUser, setIsEditingUser] = useState(false);
   const [editingUser, setEditingUser] = useState<Partial<User>>({});
@@ -425,12 +428,13 @@ export default function App() {
     for (const record of newRecords) {
       if (!record.file) continue;
       try {
+        // Pass uploadDestination to the service
         const result = await uploadToOneDrive(record.file, config, user, (progress) => {
             // Update progress state
             setPhotos(prev => prev.map(p => 
                 p.id === record.id ? { ...p, progress } : p
             ));
-        });
+        }, uploadDestination);
 
         setPhotos(prev => prev.map(p => {
           if (p.id === record.id) {
@@ -612,38 +616,6 @@ export default function App() {
       setIsGalleryLoading(false);
   };
 
-  // Bulk Toggle Visibility (Public/Hidden) - Admin only
-  const handleBulkToggleVisibility = async () => {
-      if (user?.role !== 'admin') return;
-      const itemsToToggle = galleryItems.filter(i => selectedGalleryIds.has(i.id));
-      if (itemsToToggle.length === 0) return;
-
-      if (!confirm(`Bạn có muốn thay đổi trạng thái hiển thị cho ${itemsToToggle.length} mục đã chọn?`)) return;
-
-      setIsGalleryLoading(true);
-      let count = 0;
-      for (const item of itemsToToggle) {
-          // Toggle logic: If starts with PUBLIC_, remove it. If not, add it.
-          const isPublic = item.name.startsWith('PUBLIC_');
-          const newName = isPublic ? item.name.replace('PUBLIC_', '') : `PUBLIC_${item.name}`;
-          
-          try {
-              const res = await renameOneDriveItem(config, item.id, newName);
-              if (res.success) count++;
-          } catch(e) { console.error(e); }
-          // Delay to prevent rate limiting
-          await new Promise(r => setTimeout(r, 200));
-      }
-
-      alert(`Đã cập nhật trạng thái ${count}/${itemsToToggle.length} mục.`);
-      
-      // Refresh current folder
-      const currentPath = galleryBreadcrumbs.map(b => b.path).filter(p => p && p !== 'ALL_MEDIA_SPECIAL_KEY').join('/');
-      loadGalleryPath(currentPath);
-      setSelectedGalleryIds(new Set()); // Clear selection
-  };
-
-
   const handleBreadcrumbClick = (index: number) => {
       const targetCrumb = galleryBreadcrumbs[index];
 
@@ -698,30 +670,6 @@ export default function App() {
         }
     } catch (e) {
         alert("Có lỗi xảy ra khi đổi tên.");
-    }
-  };
-
-  // ADMIN: Toggle Visibility (Public/Private)
-  const handleToggleVisibility = async (item: CloudItem) => {
-    if (!user || user.role !== 'admin') return;
-    
-    const isPublic = item.name.startsWith('PUBLIC_');
-    const newName = isPublic ? item.name.replace('PUBLIC_', '') : `PUBLIC_${item.name}`;
-    
-    setIsRenaming(item.id);
-    try {
-         const result = await renameOneDriveItem(config, item.id, newName);
-         if (result.success) {
-             // Update local state
-             setGalleryItems(prev => prev.map(i => i.id === item.id ? { ...i, name: newName } : i));
-         } else {
-             alert("Lỗi đổi trạng thái: " + result.error);
-         }
-    } catch(e) {
-         console.error(e);
-         alert("Lỗi kết nối");
-    } finally {
-         setIsRenaming(null);
     }
   };
 
@@ -1007,9 +955,6 @@ export default function App() {
     return photos; // 2 Months Uploads
   };
   
-  // Xác định xem có phải đang ở trong thư mục Admin (Quan_tri_vien) hay không để hiện nút Toggle
-  // Update logic: Allow toggle inside ANY Public folder or Quan_tri_vien
-  const isInAdminFolder = galleryBreadcrumbs.some(b => b.path.toLowerCase().includes('quan_tri_vien') || b.path.startsWith('PUBLIC_'));
 
   // --- RENDER ---
   const themeStyle = { backgroundColor: systemConfig.themeColor };
@@ -1157,8 +1102,28 @@ export default function App() {
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
               <h3 className="text-lg font-bold mb-2" style={textThemeStyle}>Upload Tài liệu/Đa phương tiện</h3>
               <p className="text-slate-500 text-sm mb-4">
-                Lưu trữ: <code className="bg-slate-100 px-1 rounded text-xs">.../{user.username}/T{(new Date().getMonth() + 1).toString().padStart(2, '0')}/Tuần_{Math.min(4, Math.ceil(new Date().getDate() / 7))}</code>
+                {uploadDestination === 'personal' ? (
+                    <>Lưu trữ: <code className="bg-slate-100 px-1 rounded text-xs">.../{user.username}/T{(new Date().getMonth() + 1).toString().padStart(2, '0')}/Tuần_{Math.min(4, Math.ceil(new Date().getDate() / 7))}</code></>
+                ) : (
+                    <>Lưu trữ: <code className="bg-slate-100 px-1 rounded text-xs">.../Tu_lieu_chung/{user.username}...</code></>
+                )}
               </p>
+
+              {/* UPLOAD DESTINATION SELECTOR */}
+              <div className="grid grid-cols-2 gap-2 mb-6 p-1 bg-slate-100 rounded-lg">
+                  <button 
+                    onClick={() => setUploadDestination('personal')}
+                    className={`py-2 px-2 rounded-md text-sm font-bold flex items-center justify-center transition-all ${uploadDestination === 'personal' ? 'bg-white shadow text-slate-800' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                      <UserPlus className="w-4 h-4 mr-2" /> Kho cá nhân
+                  </button>
+                  <button 
+                    onClick={() => setUploadDestination('common')}
+                    className={`py-2 px-2 rounded-md text-sm font-bold flex items-center justify-center transition-all ${uploadDestination === 'common' ? 'bg-white shadow text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                      <Globe className="w-4 h-4 mr-2" /> Tư liệu chung
+                  </button>
+              </div>
               
               <div className="space-y-3">
                 <button 
@@ -1370,18 +1335,14 @@ export default function App() {
                                                 <Folder className="w-6 h-6 text-amber-500 fill-amber-500" />
                                             </div>
                                            <div className="min-w-0">
-                                               <p className="font-bold text-slate-700 text-sm truncate">{item.name.replace('PUBLIC_', '')}</p>
+                                               <p className="font-bold text-slate-700 text-sm truncate">{item.name}</p>
                                                <div className="flex items-center gap-2">
                                                    <p className="text-[10px] text-slate-400">
                                                        {item.folder?.childCount} mục • {new Date(item.lastModifiedDateTime).toLocaleDateString()}
                                                    </p>
-                                                   {/* Show Public Label for everyone */}
-                                                   {item.name.startsWith('PUBLIC_') && (
-                                                       <span className="text-[9px] bg-green-100 text-green-700 px-1.5 rounded font-bold border border-green-200">Công khai</span>
-                                                   )}
-                                                   {/* Show Lock for Admin if private */}
-                                                   {user.role === 'admin' && !item.name.startsWith('PUBLIC_') && isInAdminFolder && (
-                                                       <Lock className="w-3 h-3 text-slate-400" />
+                                                   {/* Highlight Common Folder */}
+                                                   {item.name === 'Tu_lieu_chung' && (
+                                                       <span className="text-[9px] bg-indigo-100 text-indigo-700 px-1.5 rounded font-bold border border-indigo-200">CHUNG</span>
                                                    )}
                                                </div>
                                            </div>
@@ -1390,18 +1351,6 @@ export default function App() {
                                            {/* ADMIN Actions */}
                                            {user.role === 'admin' && (
                                                 <>
-                                                    {/* Toggle Visibility (Only inside Admin/Public Folder) */}
-                                                    {isInAdminFolder && (
-                                                        <button 
-                                                            onClick={(e) => { e.stopPropagation(); handleToggleVisibility(item); }}
-                                                            disabled={isRenaming === item.id}
-                                                            className={`p-2 rounded-full ${isRenaming === item.id ? 'opacity-50' : ''} ${item.name.startsWith('PUBLIC_') ? 'text-green-600 hover:bg-green-50' : 'text-slate-400 hover:bg-slate-100'}`}
-                                                            title={item.name.startsWith('PUBLIC_') ? "Đang công khai. Nhấn để ẩn." : "Đang ẩn. Nhấn để công khai."}
-                                                        >
-                                                            {isRenaming === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : item.name.startsWith('PUBLIC_') ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-                                                        </button>
-                                                    )}
-
                                                     <button 
                                                         onClick={(e) => { e.stopPropagation(); handleRenameFolder(item); }}
                                                         className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full"
@@ -1453,17 +1402,6 @@ export default function App() {
                         <span className="text-sm font-medium text-slate-700">Đã chọn</span>
                     </div>
                     <div className="flex gap-2">
-                         {/* ADMIN ONLY: Public/Hidden Button - Only show if in a context where toggling makes sense */}
-                         {user.role === 'admin' && isInAdminFolder && (
-                             <button 
-                                onClick={handleBulkToggleVisibility} 
-                                className="bg-amber-50 text-amber-600 px-3 py-2 rounded-lg font-bold text-xs flex items-center hover:bg-amber-100"
-                                title="Bật/Tắt hiển thị công khai"
-                             >
-                                <Eye className="w-4 h-4" />
-                             </button>
-                         )}
-
                          <button 
                             onClick={handleBulkDownload} 
                             className="bg-blue-50 text-blue-600 px-3 py-2 rounded-lg font-bold text-xs flex items-center hover:bg-blue-100"
