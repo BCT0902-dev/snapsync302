@@ -10,6 +10,31 @@ export const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
 };
 
 /**
+ * Helper: Trích xuất tên thư mục Cơ quan cấp 2 từ chuỗi Unit
+ * Ví dụ: "Sư đoàn 302/Trung đoàn 429" -> "Trung đoàn 429"
+ *        "Trung đoàn 88/Tiểu đoàn 4" -> "Trung đoàn 88" (Do mặc định cấp 1 là Sư đoàn)
+ */
+const getUnitFolderName = (unitString: string): string => {
+  if (!unitString) return "Unknown_Unit";
+  
+  const parts = unitString.split('/').map(p => p.trim());
+  
+  // Logic: 
+  // 1. Nếu phần đầu là "Sư đoàn 302" (hoặc f302...), và có phần tiếp theo -> Lấy phần thứ 2
+  // 2. Nếu không, lấy phần đầu tiên làm thư mục gốc của đơn vị đó.
+  
+  let targetIndex = 0;
+  if (parts.length > 1 && parts[0].toLowerCase().includes("sư đoàn 302")) {
+      targetIndex = 1;
+  }
+  
+  const folderName = parts[targetIndex] || parts[0];
+  
+  // Sanitize folder name (loại bỏ ký tự đặc biệt không được phép trong OneDrive)
+  return folderName.replace(/[<>:"/\\|?*]/g, "_");
+}
+
+/**
  * Hàm gọi về Backend của chính mình (/api/token) để lấy Access Token mới nhất
  * Export để dùng ở App.tsx cho việc fetch ảnh secure
  */
@@ -263,15 +288,17 @@ export const uploadToOneDrive = async (
 
     const token = await getAccessToken();
 
-    // Format: SnapSync302 / [Đơn vị] / [Username] / T[Tháng]
+    // Format: SnapSync302 / [Đơn vị Cấp 2] / T[Tháng]
     const now = new Date();
     const currentMonth = (now.getMonth() + 1).toString().padStart(2, '0');
     const monthFolder = `T${currentMonth}`; 
     
-    const unitFolder = user.unit || 'Unknown_Unit';
-    const userFolder = user.username;
+    // SỬA ĐỔI: Lấy tên Unit cấp 2 thay vì lấy full path
+    const unitFolder = getUnitFolderName(user.unit);
     
-    const fullPath = `${config.targetFolder}/${unitFolder}/${userFolder}/${monthFolder}`;
+    // SỬA ĐỔI: Bỏ thư mục con [Username]. 
+    // Cấu trúc mới: Root / UnitName / Month / Filename (có chứa username)
+    const fullPath = `${config.targetFolder}/${unitFolder}/${monthFolder}`;
     
     // --- LOGIC ĐỔI TÊN FILE "CHUYÊN NGHIỆP" ---
     // Format: [Username]_[Tên_Gốc_Sanitized]_[Timestamp].[Ext]
@@ -494,6 +521,7 @@ export const renameOneDriveItem = async (config: AppConfig, itemId: string, newN
 
 /**
  * HISTORY: Lấy danh sách file kèm thumbnails
+ * UPDATE: Lấy từ thư mục chung của Unit và lọc theo prefix tên file (Username)
  */
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
   if (config.simulateMode) return [];
@@ -503,9 +531,12 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     const now = new Date();
     const currentMonth = (now.getMonth() + 1).toString().padStart(2, '0');
     const monthFolder = `T${currentMonth}`;
-    const unitFolder = user.unit || 'Unknown_Unit';
     
-    const path = `${config.targetFolder}/${unitFolder}/${user.username}/${monthFolder}`;
+    // Sử dụng chung logic thư mục Unit cấp 2
+    const unitFolder = getUnitFolderName(user.unit);
+    
+    // Path mới: Root / UnitName / Month
+    const path = `${config.targetFolder}/${unitFolder}/${monthFolder}`;
     
     // expand=thumbnails để lấy link ảnh thu nhỏ
     const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children?expand=thumbnails`;
@@ -520,25 +551,30 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
 
     const data = await response.json();
     
-    const records: PhotoRecord[] = data.value.map((item: any) => {
-      let thumbnailUrl = '';
-      if (item.thumbnails && item.thumbnails.length > 0) {
-        // Ưu tiên ảnh medium
-        const t = item.thumbnails[0];
-        thumbnailUrl = t.medium?.url || t.large?.url || t.small?.url || '';
-      }
+    // FILTER: Chỉ lấy file bắt đầu bằng username của người dùng hiện tại
+    const userPrefix = `${user.username}_`;
+    
+    const records: PhotoRecord[] = data.value
+      .filter((item: any) => item.file && item.name.startsWith(userPrefix))
+      .map((item: any) => {
+        let thumbnailUrl = '';
+        if (item.thumbnails && item.thumbnails.length > 0) {
+          // Ưu tiên ảnh medium
+          const t = item.thumbnails[0];
+          thumbnailUrl = t.medium?.url || t.large?.url || t.small?.url || '';
+        }
 
-      return {
-        id: item.id,
-        fileName: item.name,
-        status: UploadStatus.SUCCESS,
-        uploadedUrl: item.webUrl,
-        timestamp: new Date(item.createdDateTime),
-        size: item.size,
-        previewUrl: thumbnailUrl,
-        mimeType: item.file?.mimeType 
-      };
-    });
+        return {
+          id: item.id,
+          fileName: item.name,
+          status: UploadStatus.SUCCESS,
+          uploadedUrl: item.webUrl,
+          timestamp: new Date(item.createdDateTime),
+          size: item.size,
+          previewUrl: thumbnailUrl,
+          mimeType: item.file?.mimeType 
+        };
+      });
 
     return records.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
@@ -556,8 +592,8 @@ export const listUserMonthFolders = async (config: AppConfig, user: User) => {
   if (config.simulateMode) return [];
   try {
     const token = await getAccessToken();
-    const unitFolder = user.unit || 'Unknown_Unit';
-    const path = `${config.targetFolder}/${unitFolder}/${user.username}`;
+    const unitFolder = getUnitFolderName(user.unit); // Sử dụng tên Unit cấp 2
+    const path = `${config.targetFolder}/${unitFolder}`;
     const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children`;
     const response = await fetch(endpoint, { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } });
     if (response.status === 404) return [];
@@ -574,8 +610,8 @@ export const listFilesInMonthFolder = async (config: AppConfig, user: User, mont
   if (config.simulateMode) return [];
   try {
     const token = await getAccessToken();
-    const unitFolder = user.unit || 'Unknown_Unit';
-    const path = `${config.targetFolder}/${unitFolder}/${user.username}/${monthName}`;
+    const unitFolder = getUnitFolderName(user.unit); // Sử dụng tên Unit cấp 2
+    const path = `${config.targetFolder}/${unitFolder}/${monthName}`;
     const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children`;
     const response = await fetch(endpoint, { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } });
     const data = await response.json();
