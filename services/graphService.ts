@@ -426,7 +426,8 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
             
             if (isSharedTree) {
                  // STRICT MODE: Trong vùng chia sẻ, MỌI THỨ phải có tag PUBLIC_ mới được hiện
-                 items = items.filter(i => i.name.startsWith('PUBLIC_'));
+                 // FIX ERROR: Explicitly type 'i' as CloudItem to avoid implicit any
+                 items = items.filter((i: CloudItem) => i.name.startsWith('PUBLIC_'));
             }
         }
     }
