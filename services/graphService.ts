@@ -413,23 +413,21 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
             });
         } else {
             // Subfolder Level:
-            // If we are currently navigating inside a Shared/Public zone (PUBLIC_... or Quan_tri_vien),
-            // we MUST enforce the filter so users ONLY see items that are explicitly made PUBLIC_.
-            // This allows the "Eye" button (toggle PUBLIC_) to effectively hide/show items inside these folders.
+            // Khi user đang ở trong một nhánh thư mục "Shared" (PUBLIC_ hoặc Quan_tri_vien),
+            // họ chỉ được phép thấy các item con NẾU item đó CŨNG ĐƯỢC đánh dấu là PUBLIC_.
             
-            // Extract the top-level folder name from the relative path
+            // Lấy tên thư mục gốc của đường dẫn hiện tại để xác định đang ở cây nào
             const pathParts = relativePath.split('/');
-            const rootFolder = pathParts[0];
+            const rootDir = pathParts[0]; // Thư mục gốc nhất (ví dụ: PUBLIC_ThuVien hoặc Quan_tri_vien)
             
-            // Check if we are inside a "Shared Zone"
-            const isInsidePublic = rootFolder.startsWith('PUBLIC_');
-            const isInsideAdmin = rootFolder === 'Quan_tri_vien';
+            // Kiểm tra xem có đang ở trong cây thư mục chia sẻ không
+            // Lưu ý: Folder đơn vị riêng của user không tính là "Shared Tree", họ thấy full trong đó.
+            const isSharedTree = rootDir.startsWith('PUBLIC_') || rootDir === 'Quan_tri_vien';
             
-            if (isInsidePublic || isInsideAdmin) {
-                 // In shared zones, hide everything that doesn't start with PUBLIC_
+            if (isSharedTree) {
+                 // STRICT MODE: Trong vùng chia sẻ, MỌI THỨ phải có tag PUBLIC_ mới được hiện
                  items = items.filter(i => i.name.startsWith('PUBLIC_'));
             }
-            // Note: If inside their own unit folder, no filter applied (they see everything).
         }
     }
 
