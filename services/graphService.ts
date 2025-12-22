@@ -11,22 +11,19 @@ export const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
 
 /**
  * Helper: Trích xuất tên thư mục Cơ quan cấp 2 từ chuỗi Unit
+ * Logic mới: Luôn lấy thành phần thứ 2 trong chuỗi (Index 1) nếu có.
  * Ví dụ: "Sư đoàn 302/Trung đoàn 429" -> "Trung đoàn 429"
- *        "Trung đoàn 88/Tiểu đoàn 4" -> "Trung đoàn 88" (Do mặc định cấp 1 là Sư đoàn)
+ *        "Trung đoàn 88/Đại đội 14" -> "Đại đội 14"
+ *        "Quan_tri_vien" -> "Quan_tri_vien"
  */
 const getUnitFolderName = (unitString: string): string => {
   if (!unitString) return "Unknown_Unit";
   
   const parts = unitString.split('/').map(p => p.trim());
   
-  // Logic: 
-  // 1. Nếu phần đầu là "Sư đoàn 302" (hoặc f302...), và có phần tiếp theo -> Lấy phần thứ 2
-  // 2. Nếu không, lấy phần đầu tiên làm thư mục gốc của đơn vị đó.
-  
-  let targetIndex = 0;
-  if (parts.length > 1 && parts[0].toLowerCase().includes("sư đoàn 302")) {
-      targetIndex = 1;
-  }
+  // Nếu có từ 2 cấp trở lên (vd: A/B), lấy B (Index 1).
+  // Nếu chỉ có 1 cấp (vd: A), lấy A (Index 0).
+  const targetIndex = parts.length > 1 ? 1 : 0;
   
   const folderName = parts[targetIndex] || parts[0];
   
