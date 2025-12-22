@@ -20,7 +20,7 @@ import {
   BarChart3, Grid
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.02";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
@@ -846,7 +846,10 @@ export default function App() {
               </div>
             </form>
           )}
-          <div className="mt-8 text-center text-xs text-slate-400">{APP_VERSION_TEXT}</div>
+          <div className="mt-8 text-center text-xs text-slate-400">
+            <p>{APP_VERSION_TEXT}</p>
+            <p className="mt-1">Developed by Vũ Đăng Hải - Bùi Công Tới</p>
+          </div>
         </div>
       </div>
     );
