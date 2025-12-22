@@ -832,3 +832,46 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
         return [];
     }
 };
+
+/**
+ * ADMIN: Tính toán thống kê sử dụng cho từng user dựa trên toàn bộ file
+ * Hàm này sẽ duyệt qua allMedia và cộng dồn size vào user tương ứng dựa trên prefix username_
+ */
+export const aggregateUserStats = (allMedia: CloudItem[], users: User[]): User[] => {
+    // Map username -> { count, size }
+    const statsMap = new Map<string, { count: number, size: number }>();
+    
+    // Init stats cho tất cả user
+    users.forEach(u => {
+        statsMap.set(u.username.toLowerCase(), { count: 0, size: 0 });
+    });
+
+    // Duyệt qua file để tính toán
+    allMedia.forEach(item => {
+        if (!item.file) return;
+        
+        // Tên file format: username_filename...
+        // Tìm username dài nhất khớp với prefix của filename
+        // (Để tránh trường hợp username con: "test" và "test1")
+        const fileName = item.name.toLowerCase();
+        
+        for (const u of users) {
+             const prefix = u.username.toLowerCase() + '_';
+             if (fileName.startsWith(prefix)) {
+                 const current = statsMap.get(u.username.toLowerCase())!;
+                 current.count++;
+                 current.size += item.size;
+                 break; // Đã tìm thấy user sở hữu, break loop user
+             }
+        }
+    });
+
+    // Cập nhật lại user list
+    return users.map(u => ({
+        ...u,
+        usageStats: {
+            fileCount: statsMap.get(u.username.toLowerCase())?.count || 0,
+            totalSize: statsMap.get(u.username.toLowerCase())?.size || 0
+        }
+    }));
+};

@@ -7,6 +7,11 @@ export interface User {
   displayName: string;
   unit: string; // Đơn vị công tác
   status?: 'active' | 'pending'; // Trạng thái tài khoản
+  // Thống kê sử dụng (Optional - được tính toán runtime)
+  usageStats?: {
+    fileCount: number;
+    totalSize: number;
+  };
 }
 
 export enum UploadStatus {

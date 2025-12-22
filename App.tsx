@@ -7,7 +7,7 @@ import {
   listUserMonthFolders, listFilesInMonthFolder, createShareLink,
   fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles,
   getAccessToken, listPathContents, fetchSystemStats, fetchAllMedia, deleteFileFromOneDrive,
-  renameOneDriveItem
+  renameOneDriveItem, aggregateUserStats
 } from './services/graphService';
 import { Button } from './components/Button';
 import { Album } from './components/Album';
@@ -18,10 +18,10 @@ import {
   FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
-  BarChart3, Grid, Pencil, Eye, EyeOff, Lock
+  BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator
 } from 'lucide-react';
 
-const APP_VERSION_TEXT = "CNTT/f302 - Version 1.1";
+const APP_VERSION_TEXT = "CNTT/f302 - Version 1.2";
 
 const DEFAULT_CONFIG: AppConfig = {
   oneDriveToken: '', 
@@ -81,8 +81,8 @@ export default function App() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [regData, setRegData] = useState({ username: '', password: '', displayName: '', unit: '' });
   
-  // Views: camera, history, gallery, settings
-  const [currentView, setCurrentView] = useState<'camera' | 'history' | 'gallery' | 'settings'>('camera');
+  // Views: camera, history, gallery, settings, user-manager
+  const [currentView, setCurrentView] = useState<'camera' | 'history' | 'gallery' | 'settings' | 'user-manager'>('camera');
   const [photos, setPhotos] = useState<PhotoRecord[]>([]);
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
@@ -91,6 +91,8 @@ export default function App() {
   const [isEditingUser, setIsEditingUser] = useState(false);
   const [editingUser, setEditingUser] = useState<Partial<User>>({});
   const [isSavingUser, setIsSavingUser] = useState(false);
+  const [userFilter, setUserFilter] = useState(''); // Filter cho danh sách cán bộ
+  const [isCalculatingStats, setIsCalculatingStats] = useState(false);
   
   // System Config State (For Admin Edit)
   const [tempSysConfig, setTempSysConfig] = useState<SystemConfig>(systemConfig); // Init from state
@@ -105,6 +107,7 @@ export default function App() {
   const [galleryItems, setGalleryItems] = useState<CloudItem[]>([]);
   const [isGalleryLoading, setIsGalleryLoading] = useState(false);
   const [isViewingAll, setIsViewingAll] = useState(false); // New state to track "View All" mode
+  const [selectedGalleryIds, setSelectedGalleryIds] = useState<Set<string>>(new Set()); // Chọn nhiều
 
   // Share View State (Legacy - keeping for fallback but prioritizing Gallery)
   const [sharingItem, setSharingItem] = useState<string | null>(null); 
@@ -178,6 +181,7 @@ export default function App() {
         setIsViewingAll(false);
         loadGalleryPath("");
         setGalleryBreadcrumbs([{name: 'Thư viện', path: ''}]);
+        setSelectedGalleryIds(new Set()); // Reset selection
     }
   }, [currentView, user]);
 
@@ -464,17 +468,9 @@ export default function App() {
             displayItems = items.filter(i => !SYSTEM_HIDDEN.includes(i.name.toLowerCase()));
 
             // 2. Logic riêng cho folder Quan_tri_vien (Admin uploads)
-            // Nếu đang ở trong thư mục Quan_tri_vien (check path) hoặc item là Quan_tri_vien (check name)
-            
-            // Check xem path hiện tại có nằm trong Quan_tri_vien không
             const isInAdminFolder = path.toLowerCase().includes('quan_tri_vien');
-            
             if (isInAdminFolder) {
-                 // Nếu đã ở trong folder Admin -> CHỈ hiện file có prefix PUBLIC_
                  displayItems = displayItems.filter(i => i.name.startsWith('PUBLIC_'));
-            } else {
-                 // Nếu ở ngoài root -> Vẫn hiện folder "Quan_tri_vien" để user click vào
-                 // Nhưng khi click vào thì logic trên sẽ chạy và lọc hết file không public.
             }
         }
 
@@ -485,6 +481,7 @@ export default function App() {
             return a.name.localeCompare(b.name);
         });
         setGalleryItems(sorted);
+        setSelectedGalleryIds(new Set()); // Reset selection when changing folder
     } catch(e) {
         console.error(e);
         setGalleryItems([]);
@@ -508,6 +505,7 @@ export default function App() {
          // Sort by Date Descending (Newest first)
          const sorted = items.sort((a,b) => new Date(b.lastModifiedDateTime).getTime() - new Date(a.lastModifiedDateTime).getTime());
          setGalleryItems(sorted);
+         setSelectedGalleryIds(new Set());
      } catch(e) {
          console.error(e);
          setGalleryItems([]);
@@ -517,6 +515,12 @@ export default function App() {
   };
 
   const handleGalleryClick = (item: CloudItem) => {
+    if (selectedGalleryIds.size > 0) {
+        // Nếu đang ở chế độ chọn, click vào folder cũng tính là chọn folder đó
+        handleToggleGallerySelect(item.id);
+        return;
+    }
+
     if (item.folder) {
         // Là thư mục -> đi sâu vào
         const newBreadcrumb = { name: item.name, path: item.name };
@@ -531,6 +535,81 @@ export default function App() {
     }
     // File được xử lý bởi component Album hoặc bỏ qua nếu không phải ảnh
   };
+
+  const handleToggleGallerySelect = (id: string) => {
+      const newSet = new Set(selectedGalleryIds);
+      if (newSet.has(id)) {
+          newSet.delete(id);
+      } else {
+          newSet.add(id);
+      }
+      setSelectedGalleryIds(newSet);
+  };
+
+  const handleBulkDownload = async () => {
+      const itemsToDownload = galleryItems.filter(i => selectedGalleryIds.has(i.id));
+      if (itemsToDownload.length === 0) return;
+
+      if (!confirm(`Bạn có muốn tải xuống ${itemsToDownload.length} mục đã chọn?`)) return;
+
+      // Logic tải từng file (chỉ hỗ trợ file, folder bỏ qua hoặc cảnh báo)
+      let count = 0;
+      for (const item of itemsToDownload) {
+          if (item.folder) {
+              console.warn("Chưa hỗ trợ tải bulk folder:", item.name);
+              continue;
+          }
+          const targetUrl = item.downloadUrl || item.webUrl;
+          try {
+              const a = document.createElement('a');
+              a.href = targetUrl;
+              a.download = item.name; // Gợi ý tên file
+              // Với link Azure trực tiếp, download attribute có thể không hoạt động nếu cross-origin, 
+              // nhưng browser thường tự xử lý header content-disposition
+              a.target = '_blank';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              count++;
+          } catch(e) { console.error(e); }
+          await new Promise(r => setTimeout(r, 500)); // Delay nhẹ
+      }
+      if (count > 0) setSelectedGalleryIds(new Set()); // Clear selection
+  };
+
+  const handleBulkDelete = async () => {
+      const itemsToDelete = galleryItems.filter(i => selectedGalleryIds.has(i.id));
+      if (itemsToDelete.length === 0) return;
+
+      // Check quyền
+      const canDeleteAll = itemsToDelete.every(item => 
+          user?.role === 'admin' || item.name.startsWith(user!.username + '_')
+      );
+
+      if (!canDeleteAll) {
+          alert("Bạn chỉ được phép xóa các file do mình tải lên!");
+          return;
+      }
+
+      if (!confirm(`CẢNH BÁO: Xóa vĩnh viễn ${itemsToDelete.length} mục đã chọn?`)) return;
+
+      setIsGalleryLoading(true); // Show loading state
+      let successCount = 0;
+      for (const item of itemsToDelete) {
+          try {
+              await deleteFileFromOneDrive(config, item.id);
+              successCount++;
+          } catch(e) { console.error(e); }
+      }
+      
+      alert(`Đã xóa ${successCount}/${itemsToDelete.length} mục.`);
+      
+      // Refresh list
+      setGalleryItems(prev => prev.filter(i => !selectedGalleryIds.has(i.id)));
+      setSelectedGalleryIds(new Set());
+      setIsGalleryLoading(false);
+  };
+
 
   const handleBreadcrumbClick = (index: number) => {
       const targetCrumb = galleryBreadcrumbs[index];
@@ -796,6 +875,25 @@ export default function App() {
   };
 
   // --- USER MANAGEMENT HANDLERS ---
+  const handleCalculateUserStats = async () => {
+      if(!user) return;
+      setIsCalculatingStats(true);
+      try {
+          // 1. Fetch toàn bộ media file của hệ thống
+          const allMedia = await fetchAllMedia(config, user);
+          // 2. Tính toán
+          const updatedUsers = aggregateUserStats(allMedia, usersList);
+          // 3. Cập nhật state (chỉ local để hiển thị, không nhất thiết save DB nếu không cần persist)
+          setUsersList(updatedUsers);
+          alert("Đã cập nhật số liệu thống kê từ " + allMedia.length + " files.");
+      } catch(e) {
+          console.error(e);
+          alert("Lỗi tính toán.");
+      } finally {
+          setIsCalculatingStats(false);
+      }
+  };
+
   const handleDeleteUser = async (id: string) => {
     if (!confirm('Bạn có chắc muốn xóa/từ chối tài khoản này?')) return;
     setIsSavingUser(true);
@@ -847,6 +945,14 @@ export default function App() {
     setEditingUser(u || { role: 'staff' });
     setIsEditingUser(true);
   };
+
+  // Filter User List
+  const filteredUsers = usersList.filter(u => {
+      const term = userFilter.toLowerCase();
+      return u.displayName.toLowerCase().includes(term) || 
+             u.username.toLowerCase().includes(term) ||
+             u.unit.toLowerCase().includes(term);
+  });
 
   // --- FILTERS ---
   // Lọc cho trang Upload (Camera): 7 ngày gần nhất
@@ -1115,7 +1221,7 @@ export default function App() {
 
         {/* --- GALLERY VIEW START --- */}
         {currentView === 'gallery' && (
-          <div className="space-y-4 h-full flex flex-col">
+          <div className="space-y-4 h-full flex flex-col relative">
             <div className="flex justify-between items-center flex-shrink-0">
                 <h3 className="font-bold text-slate-800 text-lg flex items-center">
                   <Library className="w-5 h-5 mr-2" style={textThemeStyle} />
@@ -1157,7 +1263,7 @@ export default function App() {
             </div>
 
             {/* Content Area */}
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto pb-20">
                {isGalleryLoading ? (
                    <div className="flex flex-col items-center justify-center py-12 text-slate-400">
                        <Loader2 className="w-8 h-8 animate-spin mb-2" />
@@ -1172,13 +1278,20 @@ export default function App() {
                        {/* 1. Folder List (Nếu có và không ở chế độ Xem tất cả) */}
                        {galleryItems.filter(i => i.folder).length > 0 && (
                            <div className="space-y-2">
-                               {galleryItems.filter(i => i.folder).map(item => (
+                               {galleryItems.filter(i => i.folder).map(item => {
+                                   const isSelected = selectedGalleryIds.has(item.id);
+                                   return (
                                    <div 
                                        key={item.id} 
-                                       className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between active:scale-[0.98] transition-transform cursor-pointer"
+                                       className={`bg-white p-3 rounded-xl shadow-sm border flex items-center justify-between active:scale-[0.98] transition-transform cursor-pointer ${isSelected ? 'border-emerald-500 bg-emerald-50' : 'border-slate-100'}`}
                                        onClick={() => handleGalleryClick(item)}
                                    >
                                        <div className="flex items-center min-w-0 flex-1">
+                                            {/* CHECKBOX FOLDER */}
+                                            <div onClick={(e) => { e.stopPropagation(); handleToggleGallerySelect(item.id); }} className="mr-3 text-slate-400 hover:text-emerald-500">
+                                                {isSelected ? <CheckSquare className="w-6 h-6 text-emerald-500" /> : <Square className="w-6 h-6" />}
+                                            </div>
+
                                            <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center mr-3 flex-shrink-0">
                                                 <Folder className="w-6 h-6 text-amber-500 fill-amber-500" />
                                             </div>
@@ -1222,33 +1335,13 @@ export default function App() {
                                                     >
                                                         <Pencil className="w-4 h-4" />
                                                     </button>
-                                                    <button 
-                                                        onClick={(e) => { e.stopPropagation(); handleDeleteFolder(item); }}
-                                                        className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-full"
-                                                        title="Xóa thư mục"
-                                                    >
-                                                        <Trash2 className="w-4 h-4" />
-                                                    </button>
                                                 </>
                                            )}
-
-                                           <button 
-                                                onClick={(e) => { e.stopPropagation(); handleDownloadFolder(item); }}
-                                                className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-full"
-                                                title="Tải toàn bộ thư mục"
-                                           >
-                                               {downloadingFolderId === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                                           </button>
-                                           <button 
-                                                onClick={(e) => { e.stopPropagation(); handleCreateGalleryLink(item); }}
-                                                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full"
-                                           >
-                                               {sharingItem === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
-                                           </button>
                                            <ChevronRight className="w-4 h-4 text-slate-300 ml-1" />
                                        </div>
                                    </div>
-                               ))}
+                                   );
+                               })}
                            </div>
                        )}
 
@@ -1266,12 +1359,47 @@ export default function App() {
                                   isAdmin={user.role === 'admin'}
                                   currentUser={user} // Truyền user hiện tại
                                   onDelete={handleDeleteGalleryItem}
+                                  isSelectionMode={true}
+                                  selectedIds={selectedGalleryIds}
+                                  onToggleSelect={handleToggleGallerySelect}
                                />
                            </div>
                        )}
                    </div>
                )}
             </div>
+            
+            {/* FLOATING ACTION BAR FOR SELECTION */}
+            {selectedGalleryIds.size > 0 && (
+                <div className="absolute bottom-4 left-4 right-4 bg-white rounded-xl shadow-2xl border border-slate-200 p-3 flex justify-between items-center z-50 animate-in slide-in-from-bottom duration-300">
+                    <div className="flex items-center">
+                        <div className="bg-emerald-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm mr-3">
+                            {selectedGalleryIds.size}
+                        </div>
+                        <span className="text-sm font-medium text-slate-700">Đã chọn</span>
+                    </div>
+                    <div className="flex gap-2">
+                         <button 
+                            onClick={handleBulkDownload} 
+                            className="bg-blue-50 text-blue-600 px-3 py-2 rounded-lg font-bold text-xs flex items-center hover:bg-blue-100"
+                         >
+                            <Download className="w-4 h-4 mr-1" /> Tải về
+                         </button>
+                         <button 
+                            onClick={handleBulkDelete} 
+                            className="bg-red-50 text-red-600 px-3 py-2 rounded-lg font-bold text-xs flex items-center hover:bg-red-100"
+                         >
+                            <Trash2 className="w-4 h-4 mr-1" /> Xóa
+                         </button>
+                         <button 
+                            onClick={() => setSelectedGalleryIds(new Set())}
+                            className="bg-slate-100 text-slate-600 p-2 rounded-lg hover:bg-slate-200"
+                         >
+                            <XCircle className="w-5 h-5" />
+                         </button>
+                    </div>
+                </div>
+            )}
           </div>
         )}
         {/* --- GALLERY VIEW END --- */}
@@ -1292,38 +1420,22 @@ export default function App() {
                 <Statistics stats={stats} isLoading={isStatsLoading} color={systemConfig.themeColor} />
              </div>
 
-             {/* PENDING APPROVALS LIST */}
-             <div className="bg-white p-5 rounded-xl shadow-sm border border-orange-200">
-               <h4 className="font-bold text-orange-700 flex items-center mb-4 border-b border-orange-100 pb-2">
-                 <UserPlus className="w-4 h-4 mr-2" />
-                 Yêu cầu duyệt tài khoản ({usersList.filter(u => u.status === 'pending').length})
-               </h4>
-               <div className="space-y-3">
-                 {usersList.filter(u => u.status === 'pending').length === 0 ? (
-                   <p className="text-sm text-slate-400 italic">Không có yêu cầu mới.</p>
-                 ) : (
-                   usersList.filter(u => u.status === 'pending').map(pendingUser => (
-                     <div key={pendingUser.id} className="flex flex-col bg-orange-50 p-3 rounded-lg border border-orange-100">
-                        <div className="flex justify-between items-start mb-2">
-                          <div>
-                             <p className="font-bold text-slate-800 text-sm">{pendingUser.displayName}</p>
-                             <p className="text-xs text-slate-500">{pendingUser.username} • {pendingUser.unit.split('/').pop()?.replace('Bo_chi_huy', 'Quan_tri_vien')}</p>
-                          </div>
-                          <span className="bg-orange-200 text-orange-800 text-[10px] px-2 py-0.5 rounded-full font-bold">Pending</span>
-                        </div>
-                        <div className="flex gap-2 mt-1">
-                           <button onClick={() => handleApproveUser(pendingUser)} disabled={isSavingUser} className="flex-1 bg-green-600 text-white py-1.5 rounded text-xs font-bold hover:bg-green-700 flex items-center justify-center">
-                             {isSavingUser ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3 mr-1" />} DUYỆT
-                           </button>
-                           <button onClick={() => handleDeleteUser(pendingUser.id)} disabled={isSavingUser} className="flex-1 bg-white border border-red-200 text-red-600 py-1.5 rounded text-xs font-bold hover:bg-red-50">
-                             TỪ CHỐI
-                           </button>
-                        </div>
-                     </div>
-                   ))
-                 )}
-               </div>
-             </div>
+             {/* NAVIGATION TO USER MANAGER */}
+             <button 
+                onClick={() => setCurrentView('user-manager')}
+                className="w-full bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between hover:bg-slate-50 transition-colors group"
+             >
+                <div className="flex items-center">
+                   <div className="bg-indigo-50 p-3 rounded-lg mr-4">
+                      <Users className="w-6 h-6 text-indigo-600" />
+                   </div>
+                   <div className="text-left">
+                      <h4 className="font-bold text-slate-800">Danh sách Cán bộ</h4>
+                      <p className="text-sm text-slate-500">Quản lý tài khoản, mật khẩu & thống kê sử dụng</p>
+                   </div>
+                </div>
+                <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-indigo-600" />
+             </button>
 
             {/* SYSTEM UI CONFIGURATION */}
             <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
@@ -1396,17 +1508,54 @@ export default function App() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
 
-            {/* USER MANAGEMENT (Giữ nguyên logic cũ) */}
-            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-               <div className="flex justify-between items-center mb-4">
-                 <h4 className="font-bold text-slate-700 flex items-center">
-                   <Users className="w-4 h-4 mr-2 text-slate-500" />
-                   Danh sách cán bộ (Active)
-                 </h4>
+        {currentView === 'user-manager' && user.role === 'admin' && (
+           <div className="space-y-4">
+               {/* Header Navigation */}
+               <div className="flex items-center mb-4">
+                   <button onClick={() => setCurrentView('settings')} className="mr-3 p-2 rounded-full hover:bg-slate-100">
+                       <ChevronLeft className="w-6 h-6 text-slate-600" />
+                   </button>
+                   <h3 className="font-bold text-slate-800 text-xl">Quản lý cán bộ</h3>
+               </div>
+
+               {/* Stats Action */}
+               <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl flex items-center justify-between">
+                   <div>
+                       <p className="font-bold text-indigo-900 text-sm">Thống kê sử dụng</p>
+                       <p className="text-xs text-indigo-600">Quét toàn bộ hệ thống để đếm file/dung lượng từng user.</p>
+                   </div>
+                   <button 
+                      onClick={handleCalculateUserStats}
+                      disabled={isCalculatingStats}
+                      className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-xs font-bold flex items-center hover:bg-indigo-700"
+                   >
+                       {isCalculatingStats ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Calculator className="w-4 h-4 mr-1" />}
+                       Tính toán
+                   </button>
+               </div>
+               
+               {/* Search & Filter */}
+               <div className="relative">
+                   <input 
+                      type="text" 
+                      placeholder="Tìm kiếm theo tên, đơn vị..." 
+                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      value={userFilter}
+                      onChange={(e) => setUserFilter(e.target.value)}
+                   />
+                   <div className="absolute left-3 top-3.5 text-slate-400">
+                       <Users className="w-5 h-5" />
+                   </div>
+               </div>
+
+               {/* Action Bar */}
+               <div className="flex justify-between items-center">
                  <div className="flex gap-2">
-                   <button onClick={handleReloadDB} disabled={isSavingUser} className="text-xs bg-slate-100 text-slate-600 p-2 rounded-lg font-bold flex items-center hover:bg-slate-200">
-                     <RefreshCw className={`w-3 h-3 ${isSavingUser ? 'animate-spin' : ''}`} />
+                   <button onClick={handleReloadDB} disabled={isSavingUser} className="text-xs bg-slate-100 text-slate-600 px-3 py-2 rounded-lg font-bold flex items-center hover:bg-slate-200">
+                     <RefreshCw className={`w-3 h-3 mr-1 ${isSavingUser ? 'animate-spin' : ''}`} /> Tải lại
                    </button>
                    {!isEditingUser && (
                     <button onClick={() => startEditUser()} className="text-xs text-white px-3 py-2 rounded-lg font-bold flex items-center" style={buttonStyle}>
@@ -1414,10 +1563,12 @@ export default function App() {
                     </button>
                    )}
                  </div>
+                 <span className="text-xs font-bold text-slate-500">Tổng: {filteredUsers.length}</span>
                </div>
 
-               {isEditingUser ? (
-                 <form onSubmit={handleSaveUser} className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4">
+               {/* Edit Form */}
+               {isEditingUser && (
+                 <form onSubmit={handleSaveUser} className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4 animate-in slide-in-from-top duration-300">
                     <h5 className="font-bold text-sm mb-3" style={textThemeStyle}>{editingUser.id ? 'Sửa thông tin' : 'Thêm cán bộ mới'}</h5>
                     <div className="space-y-3">
                       <input className="w-full text-sm p-2 border rounded" placeholder="Họ và tên" value={editingUser.displayName || ''} onChange={e => setEditingUser({...editingUser, displayName: e.target.value})} />
@@ -1431,24 +1582,47 @@ export default function App() {
                       </div>
                     </div>
                  </form>
-               ) : (
-                 <div className="space-y-3">
-                   {usersList.filter(u => u.status !== 'pending').map(u => (
-                     <div key={u.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
-                       <div className="overflow-hidden mr-2">
-                         <p className="font-bold text-sm text-slate-800 truncate">{u.displayName}</p>
-                         <p className="text-xs text-slate-500 truncate">{u.unit.split('/').slice(-2).join('/').replace('Bo_chi_huy', 'Quan_tri_vien')} • {u.username}</p>
-                       </div>
-                       <div className="flex gap-1 flex-shrink-0">
-                          <button onClick={() => startEditUser(u)} className="p-2 text-blue-500 bg-white rounded shadow-sm hover:bg-blue-50"><Edit className="w-4 h-4" /></button>
-                          {u.username !== 'admin' && <button onClick={() => handleDeleteUser(u.id)} className="p-2 text-red-500 bg-white rounded shadow-sm hover:bg-red-50"><Trash2 className="w-4 h-4" /></button>}
-                       </div>
-                     </div>
-                   ))}
-                 </div>
                )}
-            </div>
-          </div>
+               
+               {/* User List Table */}
+               <div className="space-y-3">
+                   {filteredUsers.length === 0 ? (
+                       <p className="text-center text-slate-400 py-8">Không tìm thấy kết quả.</p>
+                   ) : (
+                       filteredUsers.filter(u => u.status !== 'pending').map(u => (
+                         <div key={u.id} className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+                             <div className="p-3 flex items-start justify-between">
+                                 <div className="flex-1 min-w-0 pr-2">
+                                     <div className="flex items-center">
+                                         <p className="font-bold text-slate-800 truncate">{u.displayName}</p>
+                                         {u.role === 'admin' && <span className="ml-2 text-[10px] bg-red-100 text-red-600 px-1.5 rounded font-bold">ADMIN</span>}
+                                     </div>
+                                     <p className="text-xs text-slate-500 truncate mt-0.5">{u.unit.split('/').slice(-1)[0].replace('Bo_chi_huy', 'Quan_tri_vien')}</p>
+                                     <p className="text-xs text-slate-400 font-mono mt-0.5">{u.username}</p>
+                                 </div>
+                                 <div className="flex flex-col items-end gap-2">
+                                    <div className="flex gap-1">
+                                      <button onClick={() => startEditUser(u)} className="p-1.5 text-blue-500 bg-blue-50 rounded hover:bg-blue-100"><Edit className="w-4 h-4" /></button>
+                                      {u.username !== 'admin' && <button onClick={() => handleDeleteUser(u.id)} className="p-1.5 text-red-500 bg-red-50 rounded hover:bg-red-100"><Trash2 className="w-4 h-4" /></button>}
+                                    </div>
+                                 </div>
+                             </div>
+                             {/* Usage Stats Bar */}
+                             <div className="bg-slate-50 px-3 py-2 border-t border-slate-100 flex justify-between text-xs text-slate-600">
+                                 <div className="flex items-center" title="Tổng số file">
+                                     <Files className="w-3 h-3 mr-1 text-slate-400" /> 
+                                     {u.usageStats ? u.usageStats.fileCount : '-'} file
+                                 </div>
+                                 <div className="flex items-center" title="Tổng dung lượng">
+                                     <Database className="w-3 h-3 mr-1 text-slate-400" />
+                                     {u.usageStats ? (u.usageStats.totalSize / 1024 / 1024).toFixed(1) : '-'} MB
+                                 </div>
+                             </div>
+                         </div>
+                       ))
+                   )}
+               </div>
+           </div>
         )}
       </main>
 
@@ -1462,7 +1636,7 @@ export default function App() {
             <TabButton active={currentView === 'history'} onClick={() => setCurrentView('history')} icon={<History />} label="Lịch sử" color={systemConfig.themeColor} />
         )}
         {user.role === 'admin' && !isGuest && (
-          <TabButton active={currentView === 'settings'} onClick={() => setCurrentView('settings')} icon={<Settings />} label="Quản trị" color={systemConfig.themeColor} />
+          <TabButton active={['settings', 'user-manager'].includes(currentView)} onClick={() => setCurrentView('settings')} icon={<Settings />} label="Quản trị" color={systemConfig.themeColor} />
         )}
       </nav>
     </div>

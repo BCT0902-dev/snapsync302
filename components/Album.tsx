@@ -1,17 +1,24 @@
 
 import React, { useState } from 'react';
 import { CloudItem, User } from '../types';
-import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle, Trash2 } from 'lucide-react';
+import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle, Trash2, CheckSquare, Square } from 'lucide-react';
 
 interface AlbumProps {
   items: CloudItem[];
   color: string;
   isAdmin?: boolean;
-  currentUser?: User | null; // Thêm user hiện tại để check quyền sở hữu
+  currentUser?: User | null;
   onDelete?: (item: CloudItem) => void;
+  // Selection Props
+  isSelectionMode?: boolean;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (id: string) => void;
 }
 
-export const Album: React.FC<AlbumProps> = ({ items, color, isAdmin = false, currentUser, onDelete }) => {
+export const Album: React.FC<AlbumProps> = ({ 
+    items, color, isAdmin = false, currentUser, onDelete,
+    isSelectionMode = false, selectedIds, onToggleSelect
+}) => {
   const [selectedItem, setSelectedItem] = useState<CloudItem | null>(null);
   const [isImgLoading, setIsImgLoading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -21,6 +28,11 @@ export const Album: React.FC<AlbumProps> = ({ items, color, isAdmin = false, cur
   const mediaItems = items.filter(i => i.file);
 
   const handleOpenItem = (item: CloudItem) => {
+    // Nếu đang chọn nhiều thì không mở lightbox mà toggle selection
+    if (isSelectionMode && onToggleSelect) {
+        onToggleSelect(item.id);
+        return;
+    }
     setSelectedItem(item);
     setIsImgLoading(true); // Reset trạng thái loading khi mở ảnh mới
     setIsDownloading(false);
@@ -127,34 +139,46 @@ export const Album: React.FC<AlbumProps> = ({ items, color, isAdmin = false, cur
     <>
       {/* Grid View */}
       <div className="grid grid-cols-3 gap-1">
-        {mediaItems.map((item) => (
-          <div 
-            key={item.id} 
-            className="aspect-square relative overflow-hidden bg-slate-100 cursor-pointer"
-            onClick={() => handleOpenItem(item)}
-          >
-            {item.thumbnailUrl ? (
-                <img 
-                    src={item.thumbnailUrl} 
-                    alt={item.name} 
-                    className="w-full h-full object-cover transition-transform hover:scale-110" 
-                    loading="lazy"
-                />
-            ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-1">
-                    <FileIcon className="w-6 h-6 mb-1" />
-                    <span className="text-[8px] truncate w-full text-center">{item.name}</span>
-                </div>
-            )}
-            
-            {/* Overlay Icon cho Video */}
-            {item.file?.mimeType?.startsWith('video/') && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                    <PlayCircle className="w-8 h-8 text-white opacity-80" />
-                </div>
-            )}
-          </div>
-        ))}
+        {mediaItems.map((item) => {
+          const isSelected = selectedIds?.has(item.id);
+          return (
+            <div 
+              key={item.id} 
+              className={`aspect-square relative overflow-hidden bg-slate-100 cursor-pointer ${isSelected ? 'ring-4 ring-emerald-500 z-10' : ''}`}
+              onClick={() => handleOpenItem(item)}
+            >
+              {item.thumbnailUrl ? (
+                  <img 
+                      src={item.thumbnailUrl} 
+                      alt={item.name} 
+                      className="w-full h-full object-cover transition-transform hover:scale-110" 
+                      loading="lazy"
+                  />
+              ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-1">
+                      <FileIcon className="w-6 h-6 mb-1" />
+                      <span className="text-[8px] truncate w-full text-center">{item.name}</span>
+                  </div>
+              )}
+              
+              {/* Overlay Icon cho Video */}
+              {item.file?.mimeType?.startsWith('video/') && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                      <PlayCircle className="w-8 h-8 text-white opacity-80" />
+                  </div>
+              )}
+
+              {/* Selection Checkbox Overlay */}
+              {onToggleSelect && (
+                  <div className={`absolute top-1 right-1 p-1 rounded-full ${isSelected ? 'bg-emerald-500' : 'bg-black/30 hover:bg-black/50'}`} 
+                       onClick={(e) => { e.stopPropagation(); onToggleSelect(item.id); }}
+                  >
+                      {isSelected ? <CheckSquare className="w-4 h-4 text-white" /> : <Square className="w-4 h-4 text-white/80" />}
+                  </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Lightbox Modal */}
