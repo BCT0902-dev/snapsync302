@@ -470,12 +470,10 @@ export default function App() {
         const items = await listPathContents(config, path, user);
         
         let displayItems = items;
+        // Logic lọc phía client (để UI clean hơn, logic chính đã nằm ở graphService)
         if (user.role !== 'admin') {
-            // 2. Logic riêng cho folder Quan_tri_vien (Admin uploads)
-            const isInAdminFolder = path.toLowerCase().includes('quan_tri_vien');
-            if (isInAdminFolder) {
-                 displayItems = displayItems.filter(i => i.name.startsWith('PUBLIC_'));
-            }
+            // Đảm bảo không hiện file hệ thống
+            displayItems = displayItems.filter(i => !['system', 'bo_chi_huy'].includes(i.name.toLowerCase()));
         }
 
         // Sắp xếp: Folder lên trước, File sau
@@ -1010,7 +1008,8 @@ export default function App() {
   };
   
   // Xác định xem có phải đang ở trong thư mục Admin (Quan_tri_vien) hay không để hiện nút Toggle
-  const isInAdminFolder = galleryBreadcrumbs.some(b => b.path.toLowerCase().includes('quan_tri_vien'));
+  // Update logic: Allow toggle inside ANY Public folder or Quan_tri_vien
+  const isInAdminFolder = galleryBreadcrumbs.some(b => b.path.toLowerCase().includes('quan_tri_vien') || b.path.startsWith('PUBLIC_'));
 
   // --- RENDER ---
   const themeStyle = { backgroundColor: systemConfig.themeColor };
@@ -1391,6 +1390,18 @@ export default function App() {
                                            {/* ADMIN Actions */}
                                            {user.role === 'admin' && (
                                                 <>
+                                                    {/* Toggle Visibility (Only inside Admin/Public Folder) */}
+                                                    {isInAdminFolder && (
+                                                        <button 
+                                                            onClick={(e) => { e.stopPropagation(); handleToggleVisibility(item); }}
+                                                            disabled={isRenaming === item.id}
+                                                            className={`p-2 rounded-full ${isRenaming === item.id ? 'opacity-50' : ''} ${item.name.startsWith('PUBLIC_') ? 'text-green-600 hover:bg-green-50' : 'text-slate-400 hover:bg-slate-100'}`}
+                                                            title={item.name.startsWith('PUBLIC_') ? "Đang công khai. Nhấn để ẩn." : "Đang ẩn. Nhấn để công khai."}
+                                                        >
+                                                            {isRenaming === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : item.name.startsWith('PUBLIC_') ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                                                        </button>
+                                                    )}
+
                                                     <button 
                                                         onClick={(e) => { e.stopPropagation(); handleRenameFolder(item); }}
                                                         className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full"
@@ -1442,8 +1453,8 @@ export default function App() {
                         <span className="text-sm font-medium text-slate-700">Đã chọn</span>
                     </div>
                     <div className="flex gap-2">
-                         {/* ADMIN ONLY: Public/Hidden Button */}
-                         {user.role === 'admin' && (
+                         {/* ADMIN ONLY: Public/Hidden Button - Only show if in a context where toggling makes sense */}
+                         {user.role === 'admin' && isInAdminFolder && (
                              <button 
                                 onClick={handleBulkToggleVisibility} 
                                 className="bg-amber-50 text-amber-600 px-3 py-2 rounded-lg font-bold text-xs flex items-center hover:bg-amber-100"

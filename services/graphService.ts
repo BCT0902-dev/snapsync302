@@ -402,26 +402,34 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
         const SYSTEM_HIDDEN = ['system', 'bo_chi_huy'];
         items = items.filter((i: CloudItem) => !SYSTEM_HIDDEN.includes(i.name.toLowerCase()));
 
-        // Nếu đang ở Root (relativePath rỗng), lọc các folder đơn vị
         if (relativePath === "") {
-            // Lấy folder unit của user
-            const userUnitRoot = user.unit.split('/')[0].trim();
-            
+            // Root Level: User sees their own Unit + PUBLIC folders + Quan_tri_vien
             items = items.filter((i: CloudItem) => {
-                // 1. Cho phép folder chứa đơn vị của user (Logic cũ)
                 const isUserUnit = user.unit.includes(i.name);
-                
-                // 2. Cho phép folder nằm trong allowedPaths (Legacy - nếu vẫn còn dùng)
-                const isAllowed = user.allowedPaths?.some(path => path.includes(i.name) || i.name.includes(path));
-                
-                // 3. NEW: Cho phép folder bắt đầu bằng PUBLIC_
                 const isPublic = i.name.startsWith('PUBLIC_');
-
-                // 4. NEW: Cho phép nhìn thấy folder Quan_tri_vien để vào xem nội dung public bên trong
                 const isAdminFolder = i.name === 'Quan_tri_vien';
                 
-                return isUserUnit || isAllowed || isPublic || isAdminFolder;
+                return isUserUnit || isPublic || isAdminFolder;
             });
+        } else {
+            // Subfolder Level:
+            // If we are currently navigating inside a Shared/Public zone (PUBLIC_... or Quan_tri_vien),
+            // we MUST enforce the filter so users ONLY see items that are explicitly made PUBLIC_.
+            // This allows the "Eye" button (toggle PUBLIC_) to effectively hide/show items inside these folders.
+            
+            // Extract the top-level folder name from the relative path
+            const pathParts = relativePath.split('/');
+            const rootFolder = pathParts[0];
+            
+            // Check if we are inside a "Shared Zone"
+            const isInsidePublic = rootFolder.startsWith('PUBLIC_');
+            const isInsideAdmin = rootFolder === 'Quan_tri_vien';
+            
+            if (isInsidePublic || isInsideAdmin) {
+                 // In shared zones, hide everything that doesn't start with PUBLIC_
+                 items = items.filter(i => i.name.startsWith('PUBLIC_'));
+            }
+            // Note: If inside their own unit folder, no filter applied (they see everything).
         }
     }
 
