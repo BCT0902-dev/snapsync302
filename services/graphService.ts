@@ -454,6 +454,45 @@ export const deleteFileFromOneDrive = async (config: AppConfig, itemId: string):
 };
 
 /**
+ * ADMIN: Đổi tên file/folder trên OneDrive
+ */
+export const renameOneDriveItem = async (config: AppConfig, itemId: string, newName: string): Promise<{success: boolean, error?: string}> => {
+    if (config.simulateMode) return { success: true };
+
+    try {
+        const token = await getAccessToken();
+        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}`;
+        
+        // Kiểm tra tên hợp lệ sơ bộ
+        if (/[<>:"/\\|?*]/.test(newName)) {
+             return { success: false, error: "Tên chứa ký tự không hợp lệ" };
+        }
+
+        const body = { name: newName };
+
+        const response = await fetch(endpoint, {
+            method: 'PATCH',
+            headers: { 
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+             throw new Error(data.error?.message || "Không thể đổi tên");
+        }
+        
+        return { success: true };
+    } catch (error: any) {
+        console.error("Rename Error:", error);
+        return { success: false, error: error.message };
+    }
+};
+
+/**
  * HISTORY: Lấy danh sách file kèm thumbnails
  */
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {

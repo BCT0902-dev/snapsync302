@@ -6,7 +6,8 @@ import {
   uploadToOneDrive, fetchUsersFromOneDrive, saveUsersToOneDrive, 
   listUserMonthFolders, listFilesInMonthFolder, createShareLink,
   fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles,
-  getAccessToken, listPathContents, fetchSystemStats, fetchAllMedia, deleteFileFromOneDrive
+  getAccessToken, listPathContents, fetchSystemStats, fetchAllMedia, deleteFileFromOneDrive,
+  renameOneDriveItem
 } from './services/graphService';
 import { Button } from './components/Button';
 import { Album } from './components/Album';
@@ -17,7 +18,7 @@ import {
   FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
-  BarChart3, Grid
+  BarChart3, Grid, Pencil
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -548,6 +549,28 @@ export default function App() {
       } finally {
           setSharingItem(null);
       }
+  };
+
+  const handleRenameFolder = async (item: CloudItem) => {
+    if (!user || user.role !== 'admin') return;
+    
+    const newName = prompt(`Nhập tên mới cho "${item.name}":`, item.name);
+    
+    if (!newName || newName.trim() === "" || newName === item.name) return;
+
+    try {
+        const result = await renameOneDriveItem(config, item.id, newName.trim());
+        
+        if (result.success) {
+            alert("Đổi tên thành công!");
+            // Cập nhật state local để UI phản hồi ngay lập tức
+            setGalleryItems(prev => prev.map(i => i.id === item.id ? { ...i, name: newName.trim() } : i));
+        } else {
+            alert("Lỗi: " + result.error);
+        }
+    } catch (e) {
+        alert("Có lỗi xảy ra khi đổi tên.");
+    }
   };
 
   const handleDownloadFolder = async (item: CloudItem) => {
@@ -1093,6 +1116,17 @@ export default function App() {
                                            </div>
                                        </div>
                                        <div className="flex items-center gap-1">
+                                           {/* ADMIN Rename Button */}
+                                           {user.role === 'admin' && (
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); handleRenameFolder(item); }}
+                                                    className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full"
+                                                    title="Đổi tên"
+                                                >
+                                                    <Pencil className="w-4 h-4" />
+                                                </button>
+                                           )}
+
                                            <button 
                                                 onClick={(e) => { e.stopPropagation(); handleDownloadFolder(item); }}
                                                 className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-full"
