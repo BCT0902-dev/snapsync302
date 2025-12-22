@@ -654,6 +654,15 @@ export default function App() {
 
   const handleDeleteGalleryItem = async (item: CloudItem) => {
      if(!user) return;
+
+     // Kiểm tra quyền xóa: Admin hoặc Owner
+     const isOwner = item.name.startsWith(user.username + '_');
+     
+     if (user.role !== 'admin' && !isOwner) {
+         alert("Bạn chỉ có thể xóa hình ảnh do chính mình tải lên!");
+         return;
+     }
+
      try {
          const success = await deleteFileFromOneDrive(config, item.id);
          if (success) {
@@ -1190,6 +1199,7 @@ export default function App() {
                                   items={galleryItems.filter(i => i.file)} 
                                   color={systemConfig.themeColor}
                                   isAdmin={user.role === 'admin'}
+                                  currentUser={user} // Truyền user hiện tại
                                   onDelete={handleDeleteGalleryItem}
                                />
                            </div>

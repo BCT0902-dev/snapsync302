@@ -10,25 +10,28 @@ export const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
 };
 
 /**
- * Helper: Trích xuất tên thư mục Cơ quan cấp 2 từ chuỗi Unit
- * Logic mới: Luôn lấy thành phần thứ 2 trong chuỗi (Index 1) nếu có.
- * Ví dụ: "Sư đoàn 302/Trung đoàn 429" -> "Trung đoàn 429"
- *        "Trung đoàn 88/Đại đội 14" -> "Đại đội 14"
- *        "Quan_tri_vien" -> "Quan_tri_vien"
+ * Helper: Tạo đường dẫn thư mục dựa trên chuỗi Unit
+ * Logic mới: 
+ * 1. Nếu bắt đầu bằng "Sư đoàn 302", bỏ phần này đi (để tránh thừa).
+ * 2. Giữ nguyên các cấp còn lại để tạo cây thư mục.
+ * Ví dụ: "Trung đoàn 88/Ban Tham mưu" -> "Trung đoàn 88/Ban Tham mưu"
+ *        "Sư đoàn 302/Phòng Tham mưu" -> "Phòng Tham mưu"
+ *        "Trung đoàn 88/Tiểu đoàn 4/Đại đội 1" -> "Trung đoàn 88/Tiểu đoàn 4/Đại đội 1"
  */
 const getUnitFolderName = (unitString: string): string => {
   if (!unitString) return "Unknown_Unit";
   
-  const parts = unitString.split('/').map(p => p.trim());
+  let parts = unitString.split('/').map(p => p.trim());
   
-  // Nếu có từ 2 cấp trở lên (vd: A/B), lấy B (Index 1).
-  // Nếu chỉ có 1 cấp (vd: A), lấy A (Index 0).
-  const targetIndex = parts.length > 1 ? 1 : 0;
+  // Nếu phần đầu là "Sư đoàn 302" và có phần con, thì bỏ phần đầu đi
+  if (parts.length > 1 && parts[0].toLowerCase().includes("sư đoàn 302")) {
+      parts.shift(); // Remove first element
+  }
   
-  const folderName = parts[targetIndex] || parts[0];
+  // Sanitize từng phần tên thư mục (giữ lại dấu / để tạo path)
+  const cleanPath = parts.map(p => p.replace(/[<>:"\\|?*]/g, "_")).join('/');
   
-  // Sanitize folder name (loại bỏ ký tự đặc biệt không được phép trong OneDrive)
-  return folderName.replace(/[<>:"/\\|?*]/g, "_");
+  return cleanPath;
 }
 
 /**
@@ -285,16 +288,15 @@ export const uploadToOneDrive = async (
 
     const token = await getAccessToken();
 
-    // Format: SnapSync302 / [Đơn vị Cấp 2] / T[Tháng]
+    // Format: SnapSync302 / [Đơn vị Cấp 1] / [Đơn vị Cấp 2] / ... / T[Tháng]
     const now = new Date();
     const currentMonth = (now.getMonth() + 1).toString().padStart(2, '0');
     const monthFolder = `T${currentMonth}`; 
     
-    // SỬA ĐỔI: Lấy tên Unit cấp 2 thay vì lấy full path
+    // Lấy path dựa trên unit (giữ nguyên hierarchy)
     const unitFolder = getUnitFolderName(user.unit);
     
-    // SỬA ĐỔI: Bỏ thư mục con [Username]. 
-    // Cấu trúc mới: Root / UnitName / Month / Filename (có chứa username)
+    // Cấu trúc: Root / Unit Hierarchy / Month / Filename
     const fullPath = `${config.targetFolder}/${unitFolder}/${monthFolder}`;
     
     // --- LOGIC ĐỔI TÊN FILE "CHUYÊN NGHIỆP" ---
@@ -529,10 +531,10 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     const currentMonth = (now.getMonth() + 1).toString().padStart(2, '0');
     const monthFolder = `T${currentMonth}`;
     
-    // Sử dụng chung logic thư mục Unit cấp 2
+    // Sử dụng chung logic thư mục Unit (giữ nguyên hierarchy)
     const unitFolder = getUnitFolderName(user.unit);
     
-    // Path mới: Root / UnitName / Month
+    // Path mới: Root / Unit Hierarchy / Month
     const path = `${config.targetFolder}/${unitFolder}/${monthFolder}`;
     
     // expand=thumbnails để lấy link ảnh thu nhỏ
@@ -589,7 +591,7 @@ export const listUserMonthFolders = async (config: AppConfig, user: User) => {
   if (config.simulateMode) return [];
   try {
     const token = await getAccessToken();
-    const unitFolder = getUnitFolderName(user.unit); // Sử dụng tên Unit cấp 2
+    const unitFolder = getUnitFolderName(user.unit); // Sử dụng tên Unit
     const path = `${config.targetFolder}/${unitFolder}`;
     const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children`;
     const response = await fetch(endpoint, { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } });
@@ -607,7 +609,7 @@ export const listFilesInMonthFolder = async (config: AppConfig, user: User, mont
   if (config.simulateMode) return [];
   try {
     const token = await getAccessToken();
-    const unitFolder = getUnitFolderName(user.unit); // Sử dụng tên Unit cấp 2
+    const unitFolder = getUnitFolderName(user.unit); // Sử dụng tên Unit
     const path = `${config.targetFolder}/${unitFolder}/${monthName}`;
     const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children`;
     const response = await fetch(endpoint, { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } });

@@ -1,16 +1,17 @@
 
 import React, { useState } from 'react';
-import { CloudItem } from '../types';
+import { CloudItem, User } from '../types';
 import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle, Trash2 } from 'lucide-react';
 
 interface AlbumProps {
   items: CloudItem[];
   color: string;
   isAdmin?: boolean;
+  currentUser?: User | null; // Thêm user hiện tại để check quyền sở hữu
   onDelete?: (item: CloudItem) => void;
 }
 
-export const Album: React.FC<AlbumProps> = ({ items, color, isAdmin = false, onDelete }) => {
+export const Album: React.FC<AlbumProps> = ({ items, color, isAdmin = false, currentUser, onDelete }) => {
   const [selectedItem, setSelectedItem] = useState<CloudItem | null>(null);
   const [isImgLoading, setIsImgLoading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -115,6 +116,9 @@ export const Album: React.FC<AlbumProps> = ({ items, color, isAdmin = false, onD
       return item.downloadUrl || item.thumbnailUrl || "";
   };
 
+  // Check quyền xóa: Admin hoặc chủ sở hữu file (tên file bắt đầu bằng username)
+  const canDelete = isAdmin || (currentUser && selectedItem && selectedItem.name.startsWith(currentUser.username + '_'));
+
   if (mediaItems.length === 0) {
       return <div className="text-center py-10 text-slate-400">Không có hình ảnh/video nào.</div>;
   }
@@ -163,7 +167,7 @@ export const Album: React.FC<AlbumProps> = ({ items, color, isAdmin = false, onD
                   <p className="text-xs text-white/60">{(selectedItem.size / 1024 / 1024).toFixed(2)} MB • {new Date(selectedItem.lastModifiedDateTime).toLocaleDateString()}</p>
               </div>
               <div className="flex gap-4 shrink-0 items-center">
-                  {isAdmin && onDelete && (
+                  {onDelete && canDelete && (
                       <button 
                         onClick={handleDelete}
                         disabled={isDeleting}
