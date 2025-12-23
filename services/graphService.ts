@@ -135,7 +135,7 @@ export const uploadToOneDrive = async (
     config: AppConfig, 
     user: User | null, 
     onProgress?: (percent: number) => void,
-    destination: 'personal' | 'common' = 'personal' // Add destination parameter
+    destination: 'personal' | 'common' = 'personal'
 ): Promise<{ success: boolean; url?: string; error?: string; isPending?: boolean }> => {
   if (config.simulateMode) {
     if (onProgress) onProgress(0);
@@ -256,28 +256,19 @@ export const renameOneDriveItem = async (config: AppConfig, itemId: string, newN
     } catch (error: any) { return { success: false, error: error.message }; }
 };
 
-/**
- * NEW: Move file (Dùng để duyệt file)
- * Di chuyển file từ vị trí hiện tại sang thư mục đích (theo tên folder)
- */
 export const moveOneDriveItem = async (config: AppConfig, itemId: string, targetFolderName: string): Promise<boolean> => {
     if (config.simulateMode) return true;
     try {
         const token = await getAccessToken();
-        
-        // 1. Tìm ID của thư mục đích (VD: Tu_lieu_chung)
         const rootPath = config.targetFolder;
         const targetPath = `${rootPath}/${targetFolderName}`;
-        // Dùng endpoint get path để lấy item ID của folder đích
         const targetFolderRes = await fetch(`https://graph.microsoft.com/v1.0/me/drive/root:/${targetPath}`, {
             headers: { 'Authorization': `Bearer ${token}` }
         });
-        
         if (!targetFolderRes.ok) throw new Error("Target folder not found");
         const targetFolderData = await targetFolderRes.json();
         const targetFolderId = targetFolderData.id;
 
-        // 2. Move file
         const endpoint = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}`;
         const response = await fetch(endpoint, {
             method: 'PATCH',
@@ -295,9 +286,14 @@ export const moveOneDriveItem = async (config: AppConfig, itemId: string, target
     }
 };
 
-
 // --- START NEW LOGIC FOR HISTORY AND PERMISSIONS ---
 
+/**
+ * HISTORY UPDATE (Fix 2): 
+ * Sử dụng API Direct Children Listing thay vì Search API.
+ * API Search có độ trễ (latency) khi index file mới (vài phút), 
+ * trong khi Children Listing là tức thì.
+ */
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
   if (config.simulateMode) return [];
 
@@ -305,38 +301,44 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     const token = await getAccessToken();
     const now = new Date();
     
-    // 1. Xác định các đường dẫn cần quét
+    // 1. Xác định các đường dẫn chính xác nơi file vừa được upload
+    // Thay vì quét tất cả, ta quét chính xác thư mục TUẦN HIỆN TẠI và Tư liệu chung
     const pathsToCheck: string[] = [];
 
-    // Path A: Thư mục cá nhân (Tháng hiện tại + Tháng trước)
+    // Path A: Personal Folder (Tuần hiện tại & Tuần trước để đảm bảo)
     const currentMonthNum = now.getMonth() + 1;
-    const prevMonthNum = currentMonthNum === 1 ? 12 : currentMonthNum - 1;
-    
-    const monthNames = [
-        `T${currentMonthNum.toString().padStart(2, '0')}`,
-        `T${prevMonthNum.toString().padStart(2, '0')}`
-    ];
+    const monthStr = `T${currentMonthNum.toString().padStart(2, '0')}`;
+    const day = now.getDate();
+    const currentWeekNum = Math.min(4, Math.ceil(day / 7));
+    const weekStr = `Tuần_${currentWeekNum}`;
     
     const unitFolder = getUnitFolderName(user.unit);
-    monthNames.forEach(m => {
-        pathsToCheck.push(`${config.targetFolder}/${unitFolder}/${m}`);
-    });
-
-    // Path B: Thư mục Tư liệu chung
-    pathsToCheck.push(`${config.targetFolder}/Tu_lieu_chung`);
     
-    // Hàm fetch đệ quy đơn giản cho 1 folder path
-    const fetchFilesFromPath = async (searchPath: string): Promise<any[]> => {
-        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${searchPath}:/search(q='')?select=id,name,webUrl,createdDateTime,size,file,parentReference&expand=thumbnails`;
+    // Scan Tuần hiện tại
+    pathsToCheck.push(`${config.targetFolder}/${unitFolder}/${monthStr}/${weekStr}`);
+    
+    // Scan thư mục "Tư liệu chung"
+    pathsToCheck.push(`${config.targetFolder}/Tu_lieu_chung`);
+
+    // Scan thư mục "Chờ duyệt" (nếu có)
+    pathsToCheck.push(`${config.targetFolder}/Tu_lieu_chung_Cho_duyet`);
+    
+    // Hàm fetch children trực tiếp (Nhanh và Realtime)
+    const fetchChildrenFromPath = async (searchPath: string): Promise<any[]> => {
+        // Sử dụng endpoint children thay vì search
+        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${searchPath}:/children?select=id,name,webUrl,createdDateTime,size,file,parentReference&expand=thumbnails&top=200`;
+        
         try {
             const res = await fetch(endpoint, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (res.status === 404) return []; // Thư mục chưa được tạo
             if (!res.ok) return []; 
             const data = await res.json();
             return data.value || [];
         } catch { return []; }
     };
 
-    const results = await Promise.all(pathsToCheck.map(p => fetchFilesFromPath(p)));
+    // Chạy song song
+    const results = await Promise.all(pathsToCheck.map(p => fetchChildrenFromPath(p)));
     const allFiles = results.flat();
 
     const userPrefix = `${user.username}_`;
@@ -349,22 +351,31 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
           thumbnailUrl = item.thumbnails[0].medium?.url || item.thumbnails[0].large?.url || item.thumbnails[0].small?.url || '';
         }
 
+        // Xác định trạng thái dựa trên thư mục cha
+        let status = UploadStatus.SUCCESS;
+        let errorMsg = undefined;
+        // Kiểm tra đơn giản: nếu trong thư mục cha có tên "Cho_duyet"
+        if (item.parentReference?.path?.includes('Cho_duyet')) {
+            errorMsg = "Chờ duyệt";
+        }
+
         return {
           id: item.id,
           fileName: item.name,
-          status: UploadStatus.SUCCESS,
+          status: status,
+          errorMessage: errorMsg,
           uploadedUrl: item.webUrl,
           timestamp: new Date(item.createdDateTime),
           size: item.size,
           previewUrl: thumbnailUrl,
           mimeType: item.file?.mimeType,
-          views: Math.floor(Math.random() * 50),
-          downloads: Math.floor(Math.random() * 20)
+          views: 0,
+          downloads: 0
         };
       });
 
-    const uniqueRecords = Array.from(new Map(records.map(item => [item.id, item])).values());
-    return uniqueRecords.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+    // Sort mới nhất lên đầu
+    return records.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
   } catch (error) {
     console.error("Fetch Recent Files Error:", error);
@@ -400,7 +411,7 @@ export const fetchUserDeletedItems = async (config: AppConfig, user: User): Prom
 };
 
 /**
- * GALLERY UPDATE: Thêm logic allowedPaths
+ * GALLERY UPDATE (Fix 1): Ẩn thư mục lạ
  */
 export const listPathContents = async (config: AppConfig, relativePath: string = "", user?: User): Promise<CloudItem[]> => {
   if (config.simulateMode) {
@@ -441,8 +452,8 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
          size: item.size,
          thumbnailUrl: thumb,
          downloadUrl: item['@microsoft.graph.downloadUrl'],
-         views: Math.floor(Math.random() * 100), // Mock data
-         downloads: Math.floor(Math.random() * 50) // Mock data
+         views: 0,
+         downloads: 0
        } as CloudItem;
     });
 
@@ -451,32 +462,36 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
         const SYSTEM_HIDDEN = ['system', 'bo_chi_huy'];
         items = items.filter((i: CloudItem) => !SYSTEM_HIDDEN.includes(i.name.toLowerCase()));
 
-        // Logic đặc biệt cho Sư đoàn 302: Được xem tất cả (trừ admin/system)
-        // Chuyển về lowercase để so sánh chính xác
-        const isDiv302User = user.unit.toLowerCase().includes("sư đoàn 302");
-
         if (relativePath === "") {
-            // Root Level
+            // ROOT LEVEL RESTRICTION
+            // Chỉ hiển thị 2 loại folder:
+            // 1. "Tu_lieu_chung"
+            // 2. Folder đúng với Đơn vị của User
+            // Tất cả folder khác (do Admin tạo) đều bị ẩn.
+            
+            const userUnitFolderName = getUnitFolderName(user.unit).split('/').pop()?.toLowerCase(); // Lấy tên folder cuối (VD: Phong_Tham_muu)
+
             items = items.filter((i: CloudItem) => {
                 const name = i.name.toLowerCase();
-                // 1. Thư mục chờ duyệt: CHỈ ADMIN THẤY
+                
+                // Luôn hiện Tư liệu chung
+                if (name === 'tu_lieu_chung') return true;
+                
+                // Ẩn folder Chờ duyệt
                 if (name === 'tu_lieu_chung_cho_duyet') return false;
+                
+                // Ẩn folder Admin system
+                if (name === 'quan_tri_vien') return false;
 
-                // 2. Admin folders always hidden for normal users in Root
-                if (name === 'quan_tri_vien') return false; 
+                // Kiểm tra xem Folder này có phải là Folder đơn vị của User không?
+                // Logic cũ: user.unit.includes(i.name) -> Dễ bị sai nếu tên folder admin tạo gần giống
+                // Logic mới: So sánh chính xác tên folder đã được chuẩn hóa
+                if (name === userUnitFolderName) return true;
 
-                if (isDiv302User) {
-                    // Nếu là user Sư đoàn 302: Hiển thị MỌI THỨ còn lại
-                    return true;
-                } else {
-                    // Nếu là user đơn vị khác (hoặc Guest): Chỉ thấy đơn vị mình + Tu_lieu_chung
-                    const isUserUnit = user.unit.includes(i.name);
-                    const isCommonFolder = name === 'tu_lieu_chung';
-                    return isUserUnit || isCommonFolder;
-                }
+                // Nếu không thuộc các trường hợp trên -> ẨN (Đây là folder admin tạo thêm)
+                return false; 
             });
         }
-        // Ở cấp độ subfolder: User nhìn thấy hết nội dung bên trong
     }
 
     return items;
