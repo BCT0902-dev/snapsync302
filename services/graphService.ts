@@ -40,10 +40,6 @@ export const getAccessToken = async (): Promise<string> => {
   }
 };
 
-// ... (Giữ nguyên các hàm fetchUsersFromOneDrive, saveUsersToOneDrive, fetchSystemConfig, saveSystemConfig, fetchSystemStats, uploadToOneDrive, deleteFileFromOneDrive, renameOneDriveItem) ...
-// DO NOT CHANGE THESE FUNCTIONS TO SAVE TOKENS, RE-EXPORTING THEM IMPLICITLY BY NOT OVERWRITING IF NOT NEEDED
-// BUT XML REPLACEMENT REPLACES THE WHOLE FILE CONTENT OR BLOCK. I MUST PROVIDE FULL CONTENT.
-
 export const fetchUsersFromOneDrive = async (config: AppConfig): Promise<User[]> => {
   if (config.simulateMode) return INITIAL_USERS;
   try {
@@ -140,7 +136,7 @@ export const uploadToOneDrive = async (
     user: User | null, 
     onProgress?: (percent: number) => void,
     destination: 'personal' | 'common' = 'personal' // Add destination parameter
-): Promise<{ success: boolean; url?: string; error?: string }> => {
+): Promise<{ success: boolean; url?: string; error?: string; isPending?: boolean }> => {
   if (config.simulateMode) {
     if (onProgress) onProgress(0);
     return new Promise((resolve) => {
@@ -153,11 +149,18 @@ export const uploadToOneDrive = async (
     const now = new Date();
     
     let fullPath = "";
+    let isPending = false;
     
     // Logic xác định đường dẫn dựa trên điểm đến
     if (destination === 'common') {
-        // Upload vào thư mục "Tu_lieu_chung"
-        fullPath = `${config.targetFolder}/Tu_lieu_chung`;
+        if (user.role === 'admin') {
+            // Admin upload thẳng vào thư mục chung
+            fullPath = `${config.targetFolder}/Tu_lieu_chung`;
+        } else {
+            // User thường upload vào thư mục chờ duyệt
+            fullPath = `${config.targetFolder}/Tu_lieu_chung_Cho_duyet`;
+            isPending = true;
+        }
     } else {
         // Upload vào thư mục cá nhân (mặc định)
         const currentMonth = (now.getMonth() + 1).toString().padStart(2, '0');
@@ -190,7 +193,7 @@ export const uploadToOneDrive = async (
             xhr.upload.onprogress = (event) => { if (event.lengthComputable && onProgress) onProgress(Math.round((event.loaded / event.total) * 100)); };
             xhr.onload = () => {
                 if (xhr.status >= 200 && xhr.status < 300) {
-                    try { const data = JSON.parse(xhr.responseText); resolve({ success: true, url: data.webUrl }); } catch (e) { resolve({ success: true, url: '' }); }
+                    try { const data = JSON.parse(xhr.responseText); resolve({ success: true, url: data.webUrl, isPending }); } catch (e) { resolve({ success: true, url: '', isPending }); }
                 } else { reject(new Error(xhr.statusText)); }
             };
             xhr.onerror = () => reject(new Error("Lỗi kết nối mạng"));
@@ -222,7 +225,7 @@ export const uploadToOneDrive = async (
             if (chunkResponse.status === 201 || chunkResponse.status === 200) finalResponseData = await chunkResponse.json();
             start = end;
         }
-        return { success: true, url: finalResponseData ? finalResponseData.webUrl : 'Upload completed' };
+        return { success: true, url: finalResponseData ? finalResponseData.webUrl : 'Upload completed', isPending };
     }
   } catch (error: any) { return { success: false, error: error.message }; }
 };
@@ -253,11 +256,48 @@ export const renameOneDriveItem = async (config: AppConfig, itemId: string, newN
     } catch (error: any) { return { success: false, error: error.message }; }
 };
 
+/**
+ * NEW: Move file (Dùng để duyệt file)
+ * Di chuyển file từ vị trí hiện tại sang thư mục đích (theo tên folder)
+ */
+export const moveOneDriveItem = async (config: AppConfig, itemId: string, targetFolderName: string): Promise<boolean> => {
+    if (config.simulateMode) return true;
+    try {
+        const token = await getAccessToken();
+        
+        // 1. Tìm ID của thư mục đích (VD: Tu_lieu_chung)
+        const rootPath = config.targetFolder;
+        const targetPath = `${rootPath}/${targetFolderName}`;
+        // Dùng endpoint get path để lấy item ID của folder đích
+        const targetFolderRes = await fetch(`https://graph.microsoft.com/v1.0/me/drive/root:/${targetPath}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (!targetFolderRes.ok) throw new Error("Target folder not found");
+        const targetFolderData = await targetFolderRes.json();
+        const targetFolderId = targetFolderData.id;
+
+        // 2. Move file
+        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}`;
+        const response = await fetch(endpoint, {
+            method: 'PATCH',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                parentReference: { id: targetFolderId }
+            })
+        });
+
+        if (!response.ok) throw new Error("Move failed");
+        return true;
+    } catch (e) {
+        console.error("Move Item Error", e);
+        return false;
+    }
+};
+
+
 // --- START NEW LOGIC FOR HISTORY AND PERMISSIONS ---
 
-/**
- * HISTORY UPDATE: Lấy file từ tháng hiện tại VÀ tháng trước
- */
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
   if (config.simulateMode) return [];
 
@@ -287,25 +327,20 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     
     // Hàm fetch đệ quy đơn giản cho 1 folder path
     const fetchFilesFromPath = async (searchPath: string): Promise<any[]> => {
-        // Search query để tìm file trong folder
-        // Lưu ý: OneDrive Search scope có thể rộng, nên cần filter kỹ
         const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${searchPath}:/search(q='')?select=id,name,webUrl,createdDateTime,size,file,parentReference&expand=thumbnails`;
-        
         try {
             const res = await fetch(endpoint, { headers: { 'Authorization': `Bearer ${token}` } });
-            if (!res.ok) return []; // Folder có thể chưa tồn tại (ví dụ: tháng mới chưa upload gì, hoặc chưa có thư mục chung)
+            if (!res.ok) return []; 
             const data = await res.json();
             return data.value || [];
         } catch { return []; }
     };
 
-    // Chạy song song tất cả các request
     const results = await Promise.all(pathsToCheck.map(p => fetchFilesFromPath(p)));
     const allFiles = results.flat();
 
     const userPrefix = `${user.username}_`;
     
-    // Filter và map
     const records: PhotoRecord[] = allFiles
       .filter((item: any) => item.file && item.name.startsWith(userPrefix))
       .map((item: any) => {
@@ -323,14 +358,12 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
           size: item.size,
           previewUrl: thumbnailUrl,
           mimeType: item.file?.mimeType,
-          views: Math.floor(Math.random() * 50), // Mock data
-          downloads: Math.floor(Math.random() * 20) // Mock data
+          views: Math.floor(Math.random() * 50),
+          downloads: Math.floor(Math.random() * 20)
         };
       });
 
-    // Loại bỏ trùng lặp (nếu search trả về trùng do index)
     const uniqueRecords = Array.from(new Map(records.map(item => [item.id, item])).values());
-
     return uniqueRecords.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
   } catch (error) {
@@ -339,38 +372,29 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
   }
 };
 
-/**
- * HISTORY UPDATE: Lấy lịch sử đã xóa (Recycle Bin)
- */
 export const fetchUserDeletedItems = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
     if (config.simulateMode) return [];
-    
     try {
         const token = await getAccessToken();
         const endpoint = `https://graph.microsoft.com/v1.0/me/drive/recycleBin`;
-        
         const response = await fetch(endpoint, { headers: { 'Authorization': `Bearer ${token}` } });
         if (!response.ok) return [];
-        
         const data = await response.json();
         const userPrefix = `${user.username}_`;
-
         const records: PhotoRecord[] = data.value
-            .filter((item: any) => item.name.startsWith(userPrefix)) // Chỉ lấy file của user đó
+            .filter((item: any) => item.name.startsWith(userPrefix)) 
             .map((item: any) => ({
                 id: item.id,
                 fileName: item.name,
-                status: UploadStatus.ERROR, // Reuse status Error for deleted visual
-                timestamp: new Date(item.lastModifiedDateTime), // Time deleted/modified
+                status: UploadStatus.ERROR, 
+                timestamp: new Date(item.lastModifiedDateTime),
                 deletedDate: new Date(item.deleted?.deletedDateTime || new Date()),
                 size: item.size,
-                mimeType: 'deleted', // Marker
-                uploadedUrl: '' // Deleted items don't have webUrl usually
+                mimeType: 'deleted',
+                uploadedUrl: ''
             }));
-            
         return records;
     } catch (e) {
-        console.error("Fetch Recycle Bin Error", e);
         return [];
     }
 };
@@ -427,19 +451,32 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
         const SYSTEM_HIDDEN = ['system', 'bo_chi_huy'];
         items = items.filter((i: CloudItem) => !SYSTEM_HIDDEN.includes(i.name.toLowerCase()));
 
+        // Logic đặc biệt cho Sư đoàn 302: Được xem tất cả (trừ admin/system)
+        // Chuyển về lowercase để so sánh chính xác
+        const isDiv302User = user.unit.toLowerCase().includes("sư đoàn 302");
+
         if (relativePath === "") {
-            // Root Level: User sees their own Unit + Tu_lieu_chung folders + Quan_tri_vien
+            // Root Level
             items = items.filter((i: CloudItem) => {
                 const name = i.name.toLowerCase();
-                const isUserUnit = user.unit.includes(i.name);
-                // "Tu_lieu_chung" và "Quan_tri_vien" luôn hiển thị với mọi user
-                const isCommonFolder = name === 'tu_lieu_chung' || name === 'quan_tri_vien';
-                
-                return isUserUnit || isCommonFolder;
+                // 1. Thư mục chờ duyệt: CHỈ ADMIN THẤY
+                if (name === 'tu_lieu_chung_cho_duyet') return false;
+
+                // 2. Admin folders always hidden for normal users in Root
+                if (name === 'quan_tri_vien') return false; 
+
+                if (isDiv302User) {
+                    // Nếu là user Sư đoàn 302: Hiển thị MỌI THỨ còn lại
+                    return true;
+                } else {
+                    // Nếu là user đơn vị khác (hoặc Guest): Chỉ thấy đơn vị mình + Tu_lieu_chung
+                    const isUserUnit = user.unit.includes(i.name);
+                    const isCommonFolder = name === 'tu_lieu_chung';
+                    return isUserUnit || isCommonFolder;
+                }
             });
         }
-        // Ở cấp độ subfolder: User nhìn thấy hết nội dung bên trong (kể cả trong Tu_lieu_chung)
-        // mà không cần kiểm tra PUBLIC_ hay logic phức tạp nữa.
+        // Ở cấp độ subfolder: User nhìn thấy hết nội dung bên trong
     }
 
     return items;
@@ -504,7 +541,10 @@ const crawlFolderRecursive = async (token: string, folderId: string, results: Cl
         for (const item of data.value) {
             if (user.role !== 'admin') {
                 const name = item.name.toLowerCase();
+                // Admin folders: System, Bo_chi_huy, Quan_tri_vien
                 if (name === 'system' || name === 'bo_chi_huy' || name === 'quan_tri_vien') continue;
+                // Hide Pending Folder
+                if (name === 'tu_lieu_chung_cho_duyet') continue;
             }
             if (item.folder) { await crawlFolderRecursive(token, item.id, results, user); } 
             else if (item.file) {
@@ -551,6 +591,5 @@ export const aggregateUserStats = (allMedia: CloudItem[], users: User[]): User[]
     }));
 };
 
-// Placeholder for listUserMonthFolders, listFilesInMonthFolder to satisfy imports if used elsewhere
 export const listUserMonthFolders = async (c: AppConfig, u: User) => [];
 export const listFilesInMonthFolder = async (c: AppConfig, u: User, m: string) => [];

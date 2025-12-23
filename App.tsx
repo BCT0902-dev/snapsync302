@@ -7,7 +7,7 @@ import {
   listUserMonthFolders, listFilesInMonthFolder, createShareLink,
   fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles, fetchUserDeletedItems,
   getAccessToken, listPathContents, fetchSystemStats, fetchAllMedia, deleteFileFromOneDrive,
-  renameOneDriveItem, aggregateUserStats
+  renameOneDriveItem, aggregateUserStats, moveOneDriveItem
 } from './services/graphService';
 import { Button } from './components/Button';
 import { Album } from './components/Album';
@@ -438,12 +438,16 @@ export default function App() {
 
         setPhotos(prev => prev.map(p => {
           if (p.id === record.id) {
+            // Check if returned status suggests pending approval
+            const finalStatus = result.isPending ? UploadStatus.SUCCESS : (result.success ? UploadStatus.SUCCESS : UploadStatus.ERROR);
+            const errorMsg = result.isPending ? "Đã gửi (Chờ duyệt)" : result.error;
+
             return {
               ...p,
-              status: result.success ? UploadStatus.SUCCESS : UploadStatus.ERROR,
+              status: finalStatus,
               uploadedUrl: result.url,
-              errorMessage: result.error,
-              progress: 100 // Ensure 100% on completion
+              errorMessage: errorMsg, // Use errorMessage field to store "Pending" status text if success
+              progress: 100 
             };
           }
           return p;
@@ -612,6 +616,29 @@ export default function App() {
       
       // Refresh list
       setGalleryItems(prev => prev.filter(i => !selectedGalleryIds.has(i.id)));
+      setSelectedGalleryIds(new Set());
+      setIsGalleryLoading(false);
+  };
+  
+  // NEW: Bulk Approve
+  const handleBulkApprove = async () => {
+      if (!user || user.role !== 'admin') return;
+      
+      const itemsToApprove = galleryItems.filter(i => selectedGalleryIds.has(i.id));
+      if (itemsToApprove.length === 0) return;
+
+      if (!confirm(`Bạn có muốn duyệt ${itemsToApprove.length} file này vào Tư liệu chung?`)) return;
+      
+      setIsGalleryLoading(true);
+      let count = 0;
+      for (const item of itemsToApprove) {
+          try {
+             const success = await moveOneDriveItem(config, item.id, 'Tu_lieu_chung');
+             if (success) count++;
+          } catch (e) { console.error(e); }
+      }
+      alert(`Đã duyệt ${count} file.`);
+      setGalleryItems(prev => prev.filter(i => !selectedGalleryIds.has(i.id))); // Remove approved items from view
       setSelectedGalleryIds(new Set());
       setIsGalleryLoading(false);
   };
@@ -955,6 +982,9 @@ export default function App() {
     return photos; // 2 Months Uploads
   };
   
+  // -- Check if current gallery view is Pending Folder --
+  const isPendingFolder = galleryBreadcrumbs.some(b => b.name === 'Tu_lieu_chung_Cho_duyet');
+
 
   // --- RENDER ---
   const themeStyle = { backgroundColor: systemConfig.themeColor };
@@ -1105,7 +1135,7 @@ export default function App() {
                 {uploadDestination === 'personal' ? (
                     <>Lưu trữ: <code className="bg-slate-100 px-1 rounded text-xs">.../{user.username}/T{(new Date().getMonth() + 1).toString().padStart(2, '0')}/Tuần_{Math.min(4, Math.ceil(new Date().getDate() / 7))}</code></>
                 ) : (
-                    <>Lưu trữ: <code className="bg-slate-100 px-1 rounded text-xs">.../Tu_lieu_chung/{user.username}...</code></>
+                    <>Lưu trữ: <code className="bg-slate-100 px-1 rounded text-xs">.../Tu_lieu_chung/Chờ duyệt...</code></>
                 )}
               </p>
 
@@ -1172,7 +1202,8 @@ export default function App() {
                       <div className="mt-1 flex items-center justify-between">
                          <div className="flex items-center">
                             {photo.status === UploadStatus.UPLOADING && <span className="text-xs text-blue-600 flex items-center font-medium"><Loader2 className="w-3 h-3 mr-1" /> Đang gửi...</span>}
-                            {photo.status === UploadStatus.SUCCESS && <span className="text-xs text-green-600 flex items-center font-medium"><CheckCircle className="w-3 h-3 mr-1" /> Đã gửi</span>}
+                            {photo.status === UploadStatus.SUCCESS && !photo.errorMessage?.includes('Chờ duyệt') && <span className="text-xs text-green-600 flex items-center font-medium"><CheckCircle className="w-3 h-3 mr-1" /> Đã gửi</span>}
+                            {photo.status === UploadStatus.SUCCESS && photo.errorMessage?.includes('Chờ duyệt') && <span className="text-xs text-amber-600 flex items-center font-medium"><Clock className="w-3 h-3 mr-1" /> Chờ duyệt</span>}
                             {photo.status === UploadStatus.ERROR && <span className="text-xs text-red-500 flex items-center font-medium"><XCircle className="w-3 h-3 mr-1" /> {photo.errorMessage}</span>}
                          </div>
                          <span className="text-[10px] text-slate-400">{photo.timestamp.toLocaleDateString('vi-VN')}</span>
@@ -1236,11 +1267,13 @@ export default function App() {
                        <div className="flex justify-between items-center mt-1">
                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
                             historyTab === 'deleted' ? 'bg-red-100 text-red-700' :
+                            photo.status === UploadStatus.SUCCESS && photo.errorMessage?.includes('Chờ duyệt') ? 'bg-amber-100 text-amber-700' :
                             photo.status === UploadStatus.SUCCESS ? 'bg-green-100 text-green-700' :
                             photo.status === UploadStatus.UPLOADING ? 'bg-blue-100 text-blue-700' :
                             'bg-red-100 text-red-700'
                          }`}>
                            {historyTab === 'deleted' ? 'ĐÃ XÓA' : 
+                            photo.status === UploadStatus.SUCCESS && photo.errorMessage?.includes('Chờ duyệt') ? 'CHỜ DUYỆT' :
                             photo.status === UploadStatus.SUCCESS ? 'THÀNH CÔNG' : 
                             photo.status === UploadStatus.UPLOADING ? 'ĐANG GỬI' : 'LỖI'}
                          </span>
@@ -1344,6 +1377,9 @@ export default function App() {
                                                    {item.name === 'Tu_lieu_chung' && (
                                                        <span className="text-[9px] bg-indigo-100 text-indigo-700 px-1.5 rounded font-bold border border-indigo-200">CHUNG</span>
                                                    )}
+                                                   {item.name === 'Tu_lieu_chung_Cho_duyet' && (
+                                                       <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 rounded font-bold border border-amber-200">CHỜ DUYỆT</span>
+                                                   )}
                                                </div>
                                            </div>
                                        </div>
@@ -1402,6 +1438,15 @@ export default function App() {
                         <span className="text-sm font-medium text-slate-700">Đã chọn</span>
                     </div>
                     <div className="flex gap-2">
+                         {isPendingFolder && user.role === 'admin' && (
+                            <button 
+                                onClick={handleBulkApprove} 
+                                className="bg-green-50 text-green-600 px-3 py-2 rounded-lg font-bold text-xs flex items-center hover:bg-green-100 border border-green-200"
+                            >
+                                <CheckCircle className="w-4 h-4 mr-1" /> Duyệt
+                            </button>
+                         )}
+                         
                          <button 
                             onClick={handleBulkDownload} 
                             className="bg-blue-50 text-blue-600 px-3 py-2 rounded-lg font-bold text-xs flex items-center hover:bg-blue-100"
