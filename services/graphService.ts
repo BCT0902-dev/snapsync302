@@ -286,6 +286,41 @@ export const moveOneDriveItem = async (config: AppConfig, itemId: string, target
     }
 };
 
+/**
+ * Fetch direct children of a specific folder ID (Supports Tree View expansion)
+ */
+export const fetchFolderChildren = async (config: AppConfig, folderId: string): Promise<CloudItem[]> => {
+    if (config.simulateMode) return [];
+    try {
+        const token = await getAccessToken();
+        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children?select=id,name,folder,webUrl,lastModifiedDateTime,size&top=200`;
+        const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (!response.ok) throw new Error("Lỗi tải thư mục con");
+        const data = await response.json();
+        
+        // Chỉ lấy folder, bỏ qua file
+        return data.value
+            .filter((item: any) => item.folder)
+            .map((item: any) => ({
+                id: item.id,
+                name: item.name,
+                folder: item.folder,
+                webUrl: item.webUrl,
+                lastModifiedDateTime: item.lastModifiedDateTime,
+                size: item.size || 0
+            } as CloudItem))
+            .sort((a: CloudItem, b: CloudItem) => a.name.localeCompare(b.name));
+
+    } catch (error) {
+        console.error("Fetch Folder Children Error:", error);
+        return [];
+    }
+};
+
 // --- START NEW LOGIC FOR HISTORY AND PERMISSIONS ---
 
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {

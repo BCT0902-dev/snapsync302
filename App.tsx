@@ -7,7 +7,7 @@ import {
   listUserMonthFolders, listFilesInMonthFolder, createShareLink,
   fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles, fetchUserDeletedItems,
   getAccessToken, listPathContents, fetchSystemStats, fetchAllMedia, deleteFileFromOneDrive,
-  renameOneDriveItem, aggregateUserStats, moveOneDriveItem
+  renameOneDriveItem, aggregateUserStats, moveOneDriveItem, fetchFolderChildren
 } from './services/graphService';
 import { Button } from './components/Button';
 import { Album } from './components/Album';
@@ -19,7 +19,7 @@ import {
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
   BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock, Globe,
-  FolderLock
+  FolderLock, ChevronDown
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -50,6 +50,14 @@ const UNIT_SUGGESTIONS = [
   "Trung đoàn 88/Tiểu đoàn 6/Đại đội 11",
   "Trung đoàn 88/Tiểu đoàn 6/Đại đội 12",
 ];
+
+// Interface mở rộng cho Tree View
+interface ExtendedCloudItem extends CloudItem {
+  level: number;
+  expanded?: boolean;
+  isLoadingChildren?: boolean;
+  hasLoadedChildren?: boolean;
+}
 
 export default function App() {
   // --- STATE ---
@@ -103,7 +111,7 @@ export default function App() {
   // Permission Modal State
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [permissionTargetUser, setPermissionTargetUser] = useState<User | null>(null);
-  const [systemFolders, setSystemFolders] = useState<CloudItem[]>([]);
+  const [systemFolders, setSystemFolders] = useState<ExtendedCloudItem[]>([]);
   const [isLoadingFolders, setIsLoadingFolders] = useState(false);
   const [tempAllowedPaths, setTempAllowedPaths] = useState<Set<string>>(new Set());
 
@@ -416,64 +424,85 @@ export default function App() {
   };
   
   // --- PERMISSION MODAL HANDLERS ---
-  const fetchSystemFoldersForPermissions = async () => {
-    if (!permissionTargetUser) return;
-    setIsLoadingFolders(true);
-    try {
-        // Use an admin role mock to fetch everything at root
-        const rootItems = await listPathContents(config, "", { ...permissionTargetUser, role: 'admin' } as User);
-        // Filter only folders and exclude system folders
-        const folders = rootItems.filter(i => 
-            i.folder && 
-            !['system', 'users.json', 'config.json'].includes(i.name.toLowerCase())
-        );
-        setSystemFolders(folders);
-    } catch (e) {
-        console.error("Error fetching folders for permission", e);
-    } finally {
-        setIsLoadingFolders(false);
-    }
-  };
-
   const handleOpenPermissions = async (targetUser: User) => {
     setPermissionTargetUser(targetUser);
     setShowPermissionModal(true);
     setTempAllowedPaths(new Set(targetUser.allowedPaths || []));
     
-    // Fetch system folders if not already loaded (cache for session)
-    if (systemFolders.length === 0) {
-        // We can't call fetchSystemFoldersForPermissions directly here because state update is async
-        // So we just trigger the logic directly or via effect if we had one.
-        // Let's copy logic to be safe for this event handler context
-        setIsLoadingFolders(true);
-        try {
-            const rootItems = await listPathContents(config, "", { ...targetUser, role: 'admin' } as User);
-            const folders = rootItems.filter(i => 
-                i.folder && 
-                !['system', 'users.json', 'config.json'].includes(i.name.toLowerCase())
-            );
-            setSystemFolders(folders);
-        } catch (e) { console.error(e); } 
-        finally { setIsLoadingFolders(false); }
+    // Luôn fetch lại root khi mở modal để đảm bảo mới nhất
+    setIsLoadingFolders(true);
+    try {
+        const rootItems = await listPathContents(config, "", { ...targetUser, role: 'admin' } as User);
+        const folders = rootItems
+            .filter(i => i.folder && !['system', 'users.json', 'config.json'].includes(i.name.toLowerCase()))
+            .map(i => ({ ...i, level: 0, expanded: false } as ExtendedCloudItem));
+        setSystemFolders(folders);
+    } catch (e) { 
+        console.error(e); 
+    } finally { 
+        setIsLoadingFolders(false); 
     }
   };
 
   // Logic làm mới danh sách thư mục trong Modal
   const handleRefreshPermissionFolders = async () => {
       if (!permissionTargetUser) return;
-      setIsLoadingFolders(true);
-      try {
-          // Force fetch items
-          const rootItems = await listPathContents(config, "", { ...permissionTargetUser, role: 'admin' } as User);
-          const folders = rootItems.filter(i => 
-              i.folder && 
-              !['system', 'users.json', 'config.json'].includes(i.name.toLowerCase())
-          );
-          setSystemFolders(folders);
-      } catch (e) {
-          console.error("Error refreshing folders", e);
-      } finally {
-          setIsLoadingFolders(false);
+      handleOpenPermissions(permissionTargetUser);
+  };
+
+  const handleToggleFolderExpand = async (item: ExtendedCloudItem) => {
+      if (item.expanded) {
+          // Collapse: Xóa các item con (có level > item.level) nằm ngay sau nó
+          const index = systemFolders.findIndex(f => f.id === item.id);
+          if (index === -1) return;
+
+          let endIndex = index + 1;
+          while (endIndex < systemFolders.length && systemFolders[endIndex].level > item.level) {
+              endIndex++;
+          }
+          
+          const newFolders = [...systemFolders];
+          newFolders.splice(index + 1, endIndex - (index + 1));
+          newFolders[index].expanded = false;
+          setSystemFolders(newFolders);
+      } else {
+          // Expand
+          if (item.hasLoadedChildren) {
+             // Nếu đã load rồi nhưng bị ẩn thì đáng lẽ phải cache logic khác, 
+             // nhưng ở đây ta dùng logic "Collapse = Remove", nên Expand luôn là Fetch mới hoặc đơn giản
+             // là toggle lại. Để đơn giản cho Graph API, ta fetch lại.
+          }
+          
+          // Cập nhật trạng thái loading cho item cha
+          const index = systemFolders.findIndex(f => f.id === item.id);
+          if (index === -1) return;
+          
+          const newFolders = [...systemFolders];
+          newFolders[index].isLoadingChildren = true;
+          setSystemFolders(newFolders);
+
+          try {
+             const children = await fetchFolderChildren(config, item.id);
+             const extendedChildren = children.map(c => ({
+                 ...c,
+                 level: item.level + 1,
+                 expanded: false
+             } as ExtendedCloudItem));
+             
+             // Chèn con vào ngay sau cha
+             const updatedFolders = [...systemFolders];
+             updatedFolders[index].expanded = true;
+             updatedFolders[index].isLoadingChildren = false;
+             updatedFolders[index].hasLoadedChildren = true;
+             updatedFolders.splice(index + 1, 0, ...extendedChildren);
+             
+             setSystemFolders(updatedFolders);
+          } catch (e) {
+             console.error(e);
+             const resetFolders = [...systemFolders];
+             resetFolders[index].isLoadingChildren = false;
+             setSystemFolders(resetFolders);
+          }
       }
   };
 
@@ -1823,7 +1852,7 @@ export default function App() {
            </div>
         )}
 
-        {/* --- PERMISSION MODAL --- */}
+        {/* --- PERMISSION MODAL (UPDATED TREE VIEW) --- */}
         {showPermissionModal && permissionTargetUser && (
             <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
                 <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full max-h-[80vh] flex flex-col">
@@ -1848,10 +1877,10 @@ export default function App() {
                     
                     <div className="p-4 bg-slate-50 border-b border-slate-100">
                         <p className="text-sm font-medium text-slate-700">Người dùng: <span className="font-bold">{permissionTargetUser.displayName}</span></p>
-                        <p className="text-xs text-slate-500 mt-1">Chọn các thư mục mà người dùng này được phép truy cập (ngoài đơn vị gốc và Tư liệu chung).</p>
+                        <p className="text-xs text-slate-500 mt-1">Chọn các thư mục mà người dùng được phép truy cập. Nhấn vào mũi tên để xem thư mục con.</p>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                    <div className="flex-1 overflow-y-auto p-4 space-y-1">
                         {isLoadingFolders ? (
                             <div className="flex justify-center py-8">
                                 <Loader2 className="w-8 h-8 animate-spin text-slate-300" />
@@ -1862,20 +1891,40 @@ export default function App() {
                             systemFolders.map(folder => {
                                 const isAllowed = tempAllowedPaths.has(folder.name);
                                 return (
-                                    <label key={folder.id} className="flex items-center p-3 bg-white rounded-lg border border-slate-200 shadow-sm cursor-pointer hover:bg-slate-50 transition-colors">
-                                        <div className="relative flex items-center">
-                                            <input 
-                                                type="checkbox" 
-                                                className="w-5 h-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                                                checked={isAllowed}
-                                                onChange={() => handleTogglePermission(folder.name)}
-                                            />
-                                        </div>
-                                        <div className="ml-3">
-                                            <p className={`text-sm font-medium ${isAllowed ? 'text-emerald-700' : 'text-slate-700'}`}>{folder.name}</p>
-                                        </div>
-                                        {isAllowed && <Check className="w-4 h-4 text-emerald-500 ml-auto" />}
-                                    </label>
+                                    <div 
+                                        key={folder.id} 
+                                        className="flex items-center p-2 rounded-lg hover:bg-slate-50 transition-colors border border-transparent hover:border-slate-100"
+                                        style={{ paddingLeft: `${(folder.level * 16) + 8}px` }}
+                                    >
+                                        {/* Expand Toggle Button */}
+                                        <button 
+                                            onClick={() => handleToggleFolderExpand(folder)}
+                                            className="p-1 mr-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-200"
+                                        >
+                                            {folder.isLoadingChildren ? (
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                            ) : (
+                                                <ChevronDown 
+                                                    className={`w-4 h-4 transition-transform duration-200 ${folder.expanded ? '' : '-rotate-90'}`} 
+                                                />
+                                            )}
+                                        </button>
+
+                                        {/* Checkbox & Label Area */}
+                                        <label className="flex items-center flex-1 cursor-pointer select-none">
+                                            <div className="relative flex items-center">
+                                                <input 
+                                                    type="checkbox" 
+                                                    className="w-5 h-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                                                    checked={isAllowed}
+                                                    onChange={() => handleTogglePermission(folder.name)}
+                                                />
+                                            </div>
+                                            <div className="ml-3 min-w-0">
+                                                <p className={`text-sm font-medium truncate ${isAllowed ? 'text-emerald-700' : 'text-slate-700'}`}>{folder.name}</p>
+                                            </div>
+                                        </label>
+                                    </div>
                                 );
                             })
                         )}
