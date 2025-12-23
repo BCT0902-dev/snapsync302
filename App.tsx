@@ -18,7 +18,8 @@ import {
   FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
-  BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock, Globe
+  BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock, Globe,
+  FolderLock
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -99,6 +100,13 @@ export default function App() {
   const [userFilter, setUserFilter] = useState(''); // Filter cho danh sách cán bộ
   const [isCalculatingStats, setIsCalculatingStats] = useState(false);
   
+  // Permission Modal State
+  const [showPermissionModal, setShowPermissionModal] = useState(false);
+  const [permissionTargetUser, setPermissionTargetUser] = useState<User | null>(null);
+  const [systemFolders, setSystemFolders] = useState<CloudItem[]>([]);
+  const [isLoadingFolders, setIsLoadingFolders] = useState(false);
+  const [tempAllowedPaths, setTempAllowedPaths] = useState<Set<string>>(new Set());
+
   // System Config State (For Admin Edit)
   const [tempSysConfig, setTempSysConfig] = useState<SystemConfig>(systemConfig); // Init from state
   const [isSavingConfig, setIsSavingConfig] = useState(false);
@@ -405,6 +413,70 @@ export default function App() {
       setTempSysConfig(prev => ({ ...prev, logoUrl: base64String }));
     };
     reader.readAsDataURL(file);
+  };
+  
+  // --- PERMISSION MODAL HANDLERS ---
+  const handleOpenPermissions = async (targetUser: User) => {
+    setPermissionTargetUser(targetUser);
+    setShowPermissionModal(true);
+    setTempAllowedPaths(new Set(targetUser.allowedPaths || []));
+    
+    // Fetch system folders if not already loaded (cache for session)
+    if (systemFolders.length === 0) {
+        setIsLoadingFolders(true);
+        try {
+            // Use an admin role mock to fetch everything at root
+            const rootItems = await listPathContents(config, "", { ...targetUser, role: 'admin' } as User);
+            // Filter only folders and exclude system folders
+            const folders = rootItems.filter(i => 
+                i.folder && 
+                !['system', 'users.json', 'config.json'].includes(i.name.toLowerCase())
+            );
+            setSystemFolders(folders);
+        } catch (e) {
+            console.error("Error fetching folders for permission", e);
+        } finally {
+            setIsLoadingFolders(false);
+        }
+    }
+  };
+
+  const handleTogglePermission = (folderName: string) => {
+      const newSet = new Set(tempAllowedPaths);
+      if (newSet.has(folderName)) {
+          newSet.delete(folderName);
+      } else {
+          newSet.add(folderName);
+      }
+      setTempAllowedPaths(newSet);
+  };
+
+  const handleSavePermissions = async () => {
+      if (!permissionTargetUser) return;
+      setIsSavingUser(true); // Re-use saving state
+      
+      const updatedUser = {
+          ...permissionTargetUser,
+          allowedPaths: Array.from(tempAllowedPaths)
+      };
+
+      const newList = usersList.map(u => u.id === updatedUser.id ? updatedUser : u);
+      
+      try {
+          const success = await saveUsersToOneDrive(newList, config);
+          if (success) {
+              setUsersList(newList);
+              setShowPermissionModal(false);
+              alert("Cập nhật quyền thành công!");
+          } else {
+              alert("Lỗi khi lưu dữ liệu.");
+          }
+      } catch (e) {
+          console.error(e);
+          alert("Lỗi hệ thống.");
+      } finally {
+          setIsSavingUser(false);
+      }
   };
 
   // ... Helper Functions ...
@@ -1671,6 +1743,17 @@ export default function App() {
                                  </div>
                                  <div className="flex flex-col items-end gap-2">
                                     <div className="flex gap-1">
+                                      {/* PERMISSION BUTTON */}
+                                      {u.username !== 'admin' && (
+                                          <button 
+                                            onClick={() => handleOpenPermissions(u)} 
+                                            className="p-1.5 text-amber-600 bg-amber-50 rounded hover:bg-amber-100 border border-amber-200"
+                                            title="Phân quyền xem thư mục"
+                                          >
+                                              <FolderLock className="w-4 h-4" />
+                                          </button>
+                                      )}
+
                                       <button onClick={() => startEditUser(u)} className="p-1.5 text-blue-500 bg-blue-50 rounded hover:bg-blue-100"><Edit className="w-4 h-4" /></button>
                                       {u.username !== 'admin' && <button onClick={() => handleDeleteUser(u.id)} className="p-1.5 text-red-500 bg-red-50 rounded hover:bg-red-100"><Trash2 className="w-4 h-4" /></button>}
                                     </div>
@@ -1692,6 +1775,70 @@ export default function App() {
                    )}
                </div>
            </div>
+        )}
+
+        {/* --- PERMISSION MODAL --- */}
+        {showPermissionModal && permissionTargetUser && (
+            <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+                <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full max-h-[80vh] flex flex-col">
+                    <div className="p-4 border-b border-slate-100 flex justify-between items-center">
+                        <div className="flex items-center text-slate-800 font-bold">
+                            <FolderLock className="w-5 h-5 mr-2 text-amber-500" />
+                            Phân quyền xem
+                        </div>
+                        <button onClick={() => setShowPermissionModal(false)} className="p-1 hover:bg-slate-100 rounded-full">
+                            <XCircle className="w-6 h-6 text-slate-400" />
+                        </button>
+                    </div>
+                    
+                    <div className="p-4 bg-slate-50 border-b border-slate-100">
+                        <p className="text-sm font-medium text-slate-700">Người dùng: <span className="font-bold">{permissionTargetUser.displayName}</span></p>
+                        <p className="text-xs text-slate-500 mt-1">Chọn các thư mục mà người dùng này được phép truy cập (ngoài đơn vị gốc và Tư liệu chung).</p>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                        {isLoadingFolders ? (
+                            <div className="flex justify-center py-8">
+                                <Loader2 className="w-8 h-8 animate-spin text-slate-300" />
+                            </div>
+                        ) : systemFolders.length === 0 ? (
+                            <div className="text-center text-slate-400 py-4">Chưa có thư mục nào.</div>
+                        ) : (
+                            systemFolders.map(folder => {
+                                const isAllowed = tempAllowedPaths.has(folder.name);
+                                return (
+                                    <label key={folder.id} className="flex items-center p-3 bg-white rounded-lg border border-slate-200 shadow-sm cursor-pointer hover:bg-slate-50 transition-colors">
+                                        <div className="relative flex items-center">
+                                            <input 
+                                                type="checkbox" 
+                                                className="w-5 h-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                                                checked={isAllowed}
+                                                onChange={() => handleTogglePermission(folder.name)}
+                                            />
+                                        </div>
+                                        <div className="ml-3">
+                                            <p className={`text-sm font-medium ${isAllowed ? 'text-emerald-700' : 'text-slate-700'}`}>{folder.name}</p>
+                                        </div>
+                                        {isAllowed && <Check className="w-4 h-4 text-emerald-500 ml-auto" />}
+                                    </label>
+                                );
+                            })
+                        )}
+                    </div>
+
+                    <div className="p-4 border-t border-slate-100 bg-white rounded-b-2xl">
+                        <button 
+                            onClick={handleSavePermissions}
+                            disabled={isSavingUser}
+                            className="w-full py-3 text-white font-bold rounded-xl shadow-lg hover:opacity-90 flex items-center justify-center transition-all"
+                            style={buttonStyle}
+                        >
+                            {isSavingUser ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Save className="w-5 h-5 mr-2" />}
+                            Lưu thay đổi
+                        </button>
+                    </div>
+                </div>
+            </div>
         )}
       </main>
 

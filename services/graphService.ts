@@ -288,12 +288,6 @@ export const moveOneDriveItem = async (config: AppConfig, itemId: string, target
 
 // --- START NEW LOGIC FOR HISTORY AND PERMISSIONS ---
 
-/**
- * HISTORY UPDATE (Fix 2): 
- * Sử dụng API Direct Children Listing thay vì Search API.
- * API Search có độ trễ (latency) khi index file mới (vài phút), 
- * trong khi Children Listing là tức thì.
- */
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
   if (config.simulateMode) return [];
 
@@ -464,17 +458,18 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
 
         if (relativePath === "") {
             // ROOT LEVEL RESTRICTION
-            // Chỉ hiển thị 2 loại folder:
+            // Chỉ hiển thị:
             // 1. "Tu_lieu_chung"
             // 2. Folder đúng với Đơn vị của User
-            // Tất cả folder khác (do Admin tạo) đều bị ẩn.
+            // 3. Folder được cấp quyền (allowedPaths)
             
-            const userUnitFolderName = getUnitFolderName(user.unit).split('/').pop()?.toLowerCase(); // Lấy tên folder cuối (VD: Phong_Tham_muu)
+            const userUnitFolderName = getUnitFolderName(user.unit).split('/').pop()?.toLowerCase(); 
 
             items = items.filter((i: CloudItem) => {
                 const name = i.name.toLowerCase();
-                
-                // Luôn hiện Tư liệu chung
+                const rawName = i.name; // Tên gốc để check allowedPaths (case-sensitive or not)
+
+                // 1. Luôn hiện Tư liệu chung
                 if (name === 'tu_lieu_chung') return true;
                 
                 // Ẩn folder Chờ duyệt
@@ -483,12 +478,13 @@ export const listPathContents = async (config: AppConfig, relativePath: string =
                 // Ẩn folder Admin system
                 if (name === 'quan_tri_vien') return false;
 
-                // Kiểm tra xem Folder này có phải là Folder đơn vị của User không?
-                // Logic cũ: user.unit.includes(i.name) -> Dễ bị sai nếu tên folder admin tạo gần giống
-                // Logic mới: So sánh chính xác tên folder đã được chuẩn hóa
+                // 2. Folder đơn vị của User
                 if (name === userUnitFolderName) return true;
 
-                // Nếu không thuộc các trường hợp trên -> ẨN (Đây là folder admin tạo thêm)
+                // 3. Folder được cấp quyền riêng (Check allowedPaths)
+                if (user.allowedPaths && user.allowedPaths.includes(rawName)) return true;
+
+                // Nếu không thuộc các trường hợp trên -> ẨN
                 return false; 
             });
         }
