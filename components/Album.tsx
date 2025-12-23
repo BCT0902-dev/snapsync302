@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { CloudItem, User } from '../types';
-import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle, Trash2, CheckSquare, Square, Eye } from 'lucide-react';
+import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle, Trash2, CheckSquare, Square, Eye, Share2 } from 'lucide-react';
 
 interface AlbumProps {
   items: CloudItem[];
@@ -13,16 +13,20 @@ interface AlbumProps {
   isSelectionMode?: boolean;
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string) => void;
+  // New Share Prop
+  onShare?: (item: CloudItem) => void;
 }
 
 export const Album: React.FC<AlbumProps> = ({ 
     items, color, isAdmin = false, currentUser, onDelete,
-    isSelectionMode = false, selectedIds, onToggleSelect
+    isSelectionMode = false, selectedIds, onToggleSelect,
+    onShare
 }) => {
   const [selectedItem, setSelectedItem] = useState<CloudItem | null>(null);
   const [isImgLoading, setIsImgLoading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
 
   // Lọc chỉ hiển thị ảnh và video trong grid
   const mediaItems = items.filter(i => i.file);
@@ -35,6 +39,7 @@ export const Album: React.FC<AlbumProps> = ({
     setIsImgLoading(true); 
     setIsDownloading(false);
     setIsDeleting(false);
+    setIsSharing(false);
   };
 
   const handleClose = () => {
@@ -42,6 +47,7 @@ export const Album: React.FC<AlbumProps> = ({
     setIsImgLoading(false);
     setIsDownloading(false);
     setIsDeleting(false);
+    setIsSharing(false);
   };
 
   const handleNext = (e: React.MouseEvent) => {
@@ -113,6 +119,16 @@ export const Album: React.FC<AlbumProps> = ({
     } finally {
         setIsDownloading(false);
     }
+  };
+
+  const handleShareClick = async () => {
+      if (!selectedItem || !onShare) return;
+      setIsSharing(true);
+      try {
+          await onShare(selectedItem);
+      } finally {
+          setIsSharing(false);
+      }
   };
 
   // Xác định URL hiển thị: Ưu tiên downloadUrl (Full Quality), dự phòng thumbnailUrl
@@ -208,6 +224,17 @@ export const Album: React.FC<AlbumProps> = ({
                       <span className="flex items-center"><Eye className="w-4 h-4 mr-1" /> {selectedItem.views || 0}</span>
                       <span className="flex items-center ml-2"><Download className="w-4 h-4 mr-1" /> {selectedItem.downloads || 0}</span>
                   </div>
+
+                  {onShare && (
+                      <button 
+                        onClick={handleShareClick}
+                        disabled={isSharing}
+                        className="p-2 hover:bg-white/20 rounded-full flex items-center justify-center disabled:opacity-50"
+                        title="Chia sẻ"
+                      >
+                         {isSharing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Share2 className="w-5 h-5" />}
+                      </button>
+                  )}
 
                   {onDelete && canDelete && (
                       <button 

@@ -416,6 +416,25 @@ export default function App() {
   };
   
   // --- PERMISSION MODAL HANDLERS ---
+  const fetchSystemFoldersForPermissions = async () => {
+    if (!permissionTargetUser) return;
+    setIsLoadingFolders(true);
+    try {
+        // Use an admin role mock to fetch everything at root
+        const rootItems = await listPathContents(config, "", { ...permissionTargetUser, role: 'admin' } as User);
+        // Filter only folders and exclude system folders
+        const folders = rootItems.filter(i => 
+            i.folder && 
+            !['system', 'users.json', 'config.json'].includes(i.name.toLowerCase())
+        );
+        setSystemFolders(folders);
+    } catch (e) {
+        console.error("Error fetching folders for permission", e);
+    } finally {
+        setIsLoadingFolders(false);
+    }
+  };
+
   const handleOpenPermissions = async (targetUser: User) => {
     setPermissionTargetUser(targetUser);
     setShowPermissionModal(true);
@@ -423,22 +442,39 @@ export default function App() {
     
     // Fetch system folders if not already loaded (cache for session)
     if (systemFolders.length === 0) {
+        // We can't call fetchSystemFoldersForPermissions directly here because state update is async
+        // So we just trigger the logic directly or via effect if we had one.
+        // Let's copy logic to be safe for this event handler context
         setIsLoadingFolders(true);
         try {
-            // Use an admin role mock to fetch everything at root
             const rootItems = await listPathContents(config, "", { ...targetUser, role: 'admin' } as User);
-            // Filter only folders and exclude system folders
             const folders = rootItems.filter(i => 
                 i.folder && 
                 !['system', 'users.json', 'config.json'].includes(i.name.toLowerCase())
             );
             setSystemFolders(folders);
-        } catch (e) {
-            console.error("Error fetching folders for permission", e);
-        } finally {
-            setIsLoadingFolders(false);
-        }
+        } catch (e) { console.error(e); } 
+        finally { setIsLoadingFolders(false); }
     }
+  };
+
+  // Logic làm mới danh sách thư mục trong Modal
+  const handleRefreshPermissionFolders = async () => {
+      if (!permissionTargetUser) return;
+      setIsLoadingFolders(true);
+      try {
+          // Force fetch items
+          const rootItems = await listPathContents(config, "", { ...permissionTargetUser, role: 'admin' } as User);
+          const folders = rootItems.filter(i => 
+              i.folder && 
+              !['system', 'users.json', 'config.json'].includes(i.name.toLowerCase())
+          );
+          setSystemFolders(folders);
+      } catch (e) {
+          console.error("Error refreshing folders", e);
+      } finally {
+          setIsLoadingFolders(false);
+      }
   };
 
   const handleTogglePermission = (folderName: string) => {
@@ -1456,6 +1492,15 @@ export default function App() {
                                            </div>
                                        </div>
                                        <div className="flex items-center gap-1">
+                                           {/* Share Button for Folder */}
+                                           <button 
+                                                onClick={(e) => { e.stopPropagation(); handleCreateGalleryLink(item); }}
+                                                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full"
+                                                title="Chia sẻ thư mục"
+                                           >
+                                                <Share2 className="w-4 h-4" />
+                                           </button>
+                                           
                                            {/* ADMIN Actions */}
                                            {user.role === 'admin' && (
                                                 <>
@@ -1493,6 +1538,7 @@ export default function App() {
                                   isSelectionMode={true}
                                   selectedIds={selectedGalleryIds}
                                   onToggleSelect={handleToggleGallerySelect}
+                                  onShare={handleCreateGalleryLink} // NEW SHARE HANDLER
                                />
                            </div>
                        )}
@@ -1786,9 +1832,18 @@ export default function App() {
                             <FolderLock className="w-5 h-5 mr-2 text-amber-500" />
                             Phân quyền xem
                         </div>
-                        <button onClick={() => setShowPermissionModal(false)} className="p-1 hover:bg-slate-100 rounded-full">
-                            <XCircle className="w-6 h-6 text-slate-400" />
-                        </button>
+                        <div className="flex gap-2">
+                             <button 
+                                onClick={handleRefreshPermissionFolders} 
+                                className="p-1 hover:bg-slate-100 rounded-full text-slate-500 hover:text-blue-600"
+                                title="Làm mới danh sách thư mục"
+                             >
+                                <RefreshCw className={`w-5 h-5 ${isLoadingFolders ? 'animate-spin text-blue-500' : ''}`} />
+                             </button>
+                             <button onClick={() => setShowPermissionModal(false)} className="p-1 hover:bg-slate-100 rounded-full">
+                                <XCircle className="w-6 h-6 text-slate-400" />
+                             </button>
+                        </div>
                     </div>
                     
                     <div className="p-4 bg-slate-50 border-b border-slate-100">
