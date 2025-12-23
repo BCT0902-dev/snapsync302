@@ -28,13 +28,11 @@ export const Album: React.FC<AlbumProps> = ({
   const mediaItems = items.filter(i => i.file);
 
   const handleOpenItem = (item: CloudItem) => {
-    // Nếu đang chọn nhiều thì không mở lightbox mà toggle selection
-    if (isSelectionMode && onToggleSelect) {
-        onToggleSelect(item.id);
-        return;
-    }
+    // SỬA ĐỔI: Loại bỏ logic chặn xem ảnh.
+    // Click vào container (ảnh) sẽ luôn mở Lightbox xem ảnh.
+    // Việc chọn ảnh chỉ thực hiện khi click vào Checkbox.
     setSelectedItem(item);
-    setIsImgLoading(true); // Reset trạng thái loading khi mở ảnh mới
+    setIsImgLoading(true); 
     setIsDownloading(false);
     setIsDeleting(false);
   };
@@ -111,7 +109,6 @@ export const Album: React.FC<AlbumProps> = ({
     } catch (error) {
         console.error("Blob download failed, fallback to direct link", error);
         // Cách 2 (Fallback): Mở trực tiếp link downloadUrl trong tab mới
-        // Link này thường là link Azure trực tiếp, trình duyệt sẽ tự tải xuống mà không vào giao diện OneDrive
         window.open(targetUrl, '_blank');
     } finally {
         setIsDownloading(false);
@@ -123,8 +120,6 @@ export const Album: React.FC<AlbumProps> = ({
       if (item.file?.mimeType?.startsWith('video/')) {
           return item.downloadUrl || item.webUrl;
       }
-      // Với ảnh: dùng downloadUrl để hiển thị nét nhất. 
-      // Thẻ img tự động xử lý redirect của OneDrive/SharePoint mà không bị lỗi CORS.
       return item.downloadUrl || item.thumbnailUrl || "";
   };
 
@@ -145,7 +140,7 @@ export const Album: React.FC<AlbumProps> = ({
             <div 
               key={item.id} 
               className={`aspect-square relative overflow-hidden bg-slate-100 cursor-pointer ${isSelected ? 'ring-4 ring-emerald-500 z-10' : ''}`}
-              onClick={() => handleOpenItem(item)}
+              onClick={() => handleOpenItem(item)} // Click ảnh -> Xem ảnh
             >
               {item.thumbnailUrl ? (
                   <img 
@@ -170,15 +165,21 @@ export const Album: React.FC<AlbumProps> = ({
 
               {/* Selection Checkbox Overlay */}
               {onToggleSelect && (
-                  <div className={`absolute top-1 right-1 p-1 rounded-full ${isSelected ? 'bg-emerald-500' : 'bg-black/30 hover:bg-black/50'}`} 
-                       onClick={(e) => { e.stopPropagation(); onToggleSelect(item.id); }}
+                  <div 
+                    className={`absolute top-0 right-0 p-3 z-20`} 
+                    onClick={(e) => { 
+                        e.stopPropagation(); // Ngăn sự kiện nổi lên (không mở ảnh)
+                        onToggleSelect(item.id); 
+                    }}
                   >
-                      {isSelected ? <CheckSquare className="w-4 h-4 text-white" /> : <Square className="w-4 h-4 text-white/80" />}
+                     <div className={`rounded-md shadow-sm backdrop-blur-sm ${isSelected ? 'bg-emerald-500 text-white' : 'bg-black/40 text-white/80 hover:bg-black/60'}`}>
+                        {isSelected ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5" />}
+                     </div>
                   </div>
               )}
               
               {/* Stats Overlay (Góc dưới trái) */}
-              <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black/70 to-transparent p-1 pt-4 flex items-center justify-between text-[8px] text-white/90">
+              <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black/70 to-transparent p-1 pt-4 flex items-center justify-between text-[8px] text-white/90 pointer-events-none">
                   <div className="flex items-center gap-1 pl-1">
                       <Eye className="w-2.5 h-2.5" />
                       <span>{item.views || 0}</span>
