@@ -24,7 +24,7 @@ const GalleryItem = ({ item, isSelected, onToggleSelect, onClick }: {
     onToggleSelect?: (id: string) => void,
     onClick: (item: CloudItem) => void
 }) => {
-    // FIX: Ưu tiên Large URL để ảnh lưới nét hơn (Medium quá nhỏ cho màn hình HD)
+    // FIX: Ưu tiên Large URL để ảnh lưới nét hơn
     const initialSrc = item.largeUrl || item.mediumUrl || item.thumbnailUrl || item.downloadUrl;
     const [src, setSrc] = useState<string | undefined>(initialSrc);
     const [isRetrying, setIsRetrying] = useState(false);
@@ -45,15 +45,10 @@ const GalleryItem = ({ item, isSelected, onToggleSelect, onClick }: {
         // Fallback: Nếu thumbnail lỗi, thử tải file gốc
         setIsRetrying(true);
         try {
-            // Logic mới: Kiểm tra nếu là link Graph API thì cần token, ngược lại (OneDrive public link) thì KHÔNG được gửi token
-            const needsToken = item.downloadUrl.includes('graph.microsoft.com');
-            // FIX TS ERROR: Khai báo rõ kiểu Record<string, string>
-            const headers: Record<string, string> = {};
-            if (needsToken) {
-                headers['Authorization'] = `Bearer ${await getAccessToken()}`;
-            }
-
-            const res = await fetch(item.downloadUrl, { headers });
+            // QUAN TRỌNG: Thử tải không header trước (Link public/signed)
+            const headers: Record<string, string> = {}; 
+            let res = await fetch(item.downloadUrl, { headers });
+            
             if (res.ok) {
                 const blob = await res.blob();
                 const blobUrl = URL.createObjectURL(blob);
@@ -147,7 +142,7 @@ export const Album: React.FC<AlbumProps> = ({
     let blobUrlToRevoke: string | null = null;
 
     const loadHighQuality = async () => {
-        // 1. Nếu là video, dùng link trực tiếp (hoặc proxy nếu cần)
+        // 1. Nếu là video, dùng link trực tiếp
         if (selectedItem.file?.mimeType?.startsWith('video/')) {
              setFullViewSrc(selectedItem.downloadUrl || selectedItem.webUrl);
              setIsHDLoading(false);
@@ -157,32 +152,22 @@ export const Album: React.FC<AlbumProps> = ({
 
         // 2. Nếu là ảnh:
         // B1: Hiển thị ngay Large Thumbnail (Preview nhanh, hơi mờ)
-        // Nếu đã có blob từ lần trước, setFullViewSrc đã được clear ở handleClose, 
-        // ở đây ta set placeholder.
         const placeholder = selectedItem.largeUrl || selectedItem.mediumUrl || selectedItem.thumbnailUrl;
         setFullViewSrc(placeholder);
         
         // B2: Tải Blob gốc (HD)
         if (selectedItem.downloadUrl) {
-            setIsHDLoading(true); // Hiển thị spinner nhỏ báo đang nét dần
+            setIsHDLoading(true); 
             try {
-                // QUAN TRỌNG: Không gửi Token nếu là link downloadUrl (thường là 1drv.com hoặc pre-signed)
-                const needsToken = selectedItem.downloadUrl.includes('graph.microsoft.com');
+                // SỬA LỖI QUAN TRỌNG:
+                // Link downloadUrl của OneDrive thường là Pre-signed URL.
+                // TUYỆT ĐỐI KHÔNG gửi header 'Authorization' vào link này, nếu gửi sẽ bị lỗi 403/401.
+                const headers: Record<string, string> = {}; 
                 
-                // FIX TS ERROR: Khai báo rõ kiểu Record<string, string>
-                const headers: Record<string, string> = {};
-                
-                if (needsToken) {
-                     const token = await getAccessToken();
-                     headers['Authorization'] = `Bearer ${token}`;
-                }
-
-                // Thử fetch lần 1 (theo logic trên)
                 let res = await fetch(selectedItem.downloadUrl, { headers });
                 
-                // Nếu lỗi 401/403 (Unauthorized) và ta chưa gửi token, thử lại BẰNG API Content endpoint
-                if (!res.ok && !needsToken) {
-                     // Fallback: Gọi API Content chính thức
+                // Nếu fetch trực tiếp thất bại (trường hợp hiếm, link hết hạn), mới dùng Token gọi API /content
+                if (!res.ok) {
                      const token = await getAccessToken();
                      const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${selectedItem.id}/content`;
                      res = await fetch(contentUrl, {
@@ -198,17 +183,16 @@ export const Album: React.FC<AlbumProps> = ({
                 }
             } catch (e) {
                 console.error("Failed to load HD image", e);
-                // Nếu lỗi tải HD, giữ nguyên placeholder
             } finally {
                 if (isActive) setIsHDLoading(false);
-                if (isActive) setIsImgLoading(false); // Tắt loading tổng
+                if (isActive) setIsImgLoading(false);
             }
         } else {
              setIsImgLoading(false);
         }
     };
 
-    setIsImgLoading(true); // Spinner chính lúc mới mở
+    setIsImgLoading(true); 
     loadHighQuality();
 
     return () => {
@@ -265,28 +249,21 @@ export const Album: React.FC<AlbumProps> = ({
     e.stopPropagation();
     if (!selectedItem) return;
     
-    // Tải file gốc
     const targetUrl = selectedItem.downloadUrl || selectedItem.webUrl;
     if (!targetUrl) { alert("Không tìm thấy đường dẫn tải file."); return; }
 
     try {
         setIsDownloading(true);
         
-        // FIX: Logic download tương tự như View Full - Xử lý token thông minh
-        const needsToken = targetUrl.includes('graph.microsoft.com');
+        // SỬA LỖI DOWNLOAD:
+        // 1. Fetch file dưới dạng Blob (để tránh trình duyệt mở tab mới)
+        // 2. Không gửi Auth Header cho link downloadUrl
+        const headers: Record<string, string> = {}; 
         
-        // FIX TS ERROR: Khai báo rõ kiểu Record<string, string>
-        const headers: Record<string, string> = {};
-        
-        if (needsToken) {
-             const token = await getAccessToken();
-             headers['Authorization'] = `Bearer ${token}`;
-        }
-
         let response = await fetch(targetUrl, { headers });
 
-        // Fallback retry nếu lỗi và chưa thử token
-        if (!response.ok && !needsToken) {
+        // Fallback nếu link trực tiếp lỗi
+        if (!response.ok) {
              const token = await getAccessToken();
              const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${selectedItem.id}/content`;
              response = await fetch(contentUrl, {
@@ -299,6 +276,7 @@ export const Album: React.FC<AlbumProps> = ({
         const blob = await response.blob();
         const blobUrl = window.URL.createObjectURL(blob);
         
+        // Tạo thẻ a ảo để kích hoạt tải xuống
         const link = document.createElement('a');
         link.href = blobUrl;
         link.download = selectedItem.name;
@@ -308,7 +286,8 @@ export const Album: React.FC<AlbumProps> = ({
         document.body.removeChild(link);
         window.URL.revokeObjectURL(blobUrl);
     } catch (error) {
-        // Fallback cuối cùng: Mở tab mới (nhưng cố gắng tránh)
+        console.error("Download error:", error);
+        // Chỉ mở tab mới khi mọi cách đều thất bại
         window.open(targetUrl, '_blank');
     } finally {
         setIsDownloading(false);
