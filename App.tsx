@@ -13,6 +13,8 @@ import {
 import { Button } from './components/Button';
 import { Album } from './components/Album';
 import { Statistics } from './components/Statistics';
+import { VisitorManager } from './components/VisitorManager'; // New Component
+import { VisitorForm } from './components/VisitorForm'; // New Component
 import { QRCodeCanvas } from 'qrcode.react';
 import { 
   Camera, LogOut, Info, Settings, History, CheckCircle, XCircle, 
@@ -21,7 +23,7 @@ import {
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
   BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock, Globe,
-  FolderLock, ChevronDown, QrCode, ExternalLink
+  FolderLock, ChevronDown, QrCode, ExternalLink, HeartHandshake
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -92,8 +94,8 @@ export default function App() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [regData, setRegData] = useState({ username: '', password: '', displayName: '', unit: '' });
   
-  // Views: camera, history, gallery, settings, user-manager
-  const [currentView, setCurrentView] = useState<'camera' | 'history' | 'gallery' | 'settings' | 'user-manager'>('camera');
+  // Views: camera, history, gallery, settings, user-manager, visitor-manager
+  const [currentView, setCurrentView] = useState<'camera' | 'history' | 'gallery' | 'settings' | 'user-manager' | 'visitor-manager'>('camera');
   const [photos, setPhotos] = useState<PhotoRecord[]>([]);
   const [deletedPhotos, setDeletedPhotos] = useState<PhotoRecord[]>([]); // New: Deleted Items
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
@@ -144,6 +146,9 @@ export default function App() {
   const [sharingItem, setSharingItem] = useState<string | null>(null); 
   const [downloadingFolderId, setDownloadingFolderId] = useState<string | null>(null);
   
+  // Guest View State (Parsed from URL)
+  const [guestViewParams, setGuestViewParams] = useState<{unit: string, month: string} | null>(null);
+  
   // Action State
   const [isRenaming, setIsRenaming] = useState<string | null>(null);
 
@@ -159,13 +164,29 @@ export default function App() {
 
   // --- EFFECTS ---
   
-  // Splash Screen Effect
+  // Check for URL params to detect Guest QR scan
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const view = params.get('view');
+    if (view === 'guest-visit') {
+        const unit = params.get('unit');
+        const month = params.get('month');
+        if (unit && month) {
+            setGuestViewParams({ unit, month });
+            setShowSplash(false); // Skip splash for guest
+            return;
+        }
+    }
+  }, []);
+  
+  // Splash Screen Effect (only if not guest view)
+  useEffect(() => {
+    if (guestViewParams) return; 
     const timer = setTimeout(() => {
       setShowSplash(false);
     }, 1500); // 1.5 giây để load
     return () => clearTimeout(timer);
-  }, []);
+  }, [guestViewParams]);
 
   useEffect(() => {
     const initData = async () => {
@@ -311,6 +332,7 @@ export default function App() {
     }
   };
 
+  // ... (Rest of existing handlers like handleRegister, handleLogout, etc. - No changes needed to logic, just context) ...
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!regData.username || !regData.password || !regData.displayName || !regData.unit) {
@@ -367,8 +389,11 @@ export default function App() {
     setCurrentView('camera');
     setPhotos([]); // Clear local photos
     setShowDisclaimer(false);
+    setGuestViewParams(null); // Clear guest params if any
+    // Remove URL params
+    window.history.replaceState(null, '', window.location.pathname);
   };
-
+  
   const handleReloadDB = async () => {
     setIsSavingUser(true);
     try {
@@ -1196,7 +1221,7 @@ export default function App() {
   const textThemeStyle = { color: systemConfig.themeColor };
   const buttonStyle = { backgroundColor: systemConfig.themeColor };
 
-  // 1. RENDER SPLASH SCREEN
+  // 1. RENDER SPLASH SCREEN (Skip if Guest)
   if (showSplash) {
     return (
       <div className="fixed inset-0 z-[100] bg-emerald-50 flex flex-col items-center justify-center animate-out fade-out duration-700 fill-mode-forwards">
@@ -1222,6 +1247,23 @@ export default function App() {
     );
   }
 
+  // 2. RENDER GUEST VIEW (If visitor scans QR)
+  if (guestViewParams) {
+      return (
+          <VisitorForm 
+            unitCode={guestViewParams.unit}
+            monthStr={guestViewParams.month}
+            config={config}
+            onSuccess={() => {
+                alert("Quay lại trang chính...");
+                handleLogout(); // Clear params and reset
+            }}
+            onCancel={() => handleLogout()}
+          />
+      );
+  }
+
+  // 3. RENDER LOGIN SCREEN
   if (!user) {
     // ... Login UI (Giữ nguyên)
     return (
@@ -1432,6 +1474,7 @@ export default function App() {
           </div>
         )}
 
+        {/* ... (History and Gallery views same as before) ... */}
         {currentView === 'history' && !isGuest && (
           <div className="space-y-4">
              {/* ... (History View content) ... */}
@@ -1498,7 +1541,7 @@ export default function App() {
           </div>
         )}
 
-        {/* --- GALLERY VIEW START --- */}
+        {/* ... (Gallery View same as before) ... */}
         {currentView === 'gallery' && (
           <div className="space-y-4 h-full flex flex-col relative">
             <div className="flex justify-between items-center flex-shrink-0">
@@ -1710,7 +1753,16 @@ export default function App() {
         )}
         {/* --- GALLERY VIEW END --- */}
 
-        {/* --- QR CODE MODAL --- */}
+        {/* --- VISITOR MANAGEMENT VIEW --- */}
+        {currentView === 'visitor-manager' && !isGuest && (
+            <VisitorManager 
+                user={user}
+                config={config}
+                themeColor={systemConfig.themeColor}
+            />
+        )}
+
+        {/* ... (QR Code Modal and Settings) ... */}
         {qrModalData && (
             <div className="fixed inset-0 z-[80] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-200">
                 <div className="bg-white rounded-2xl p-6 shadow-2xl max-w-sm w-full flex flex-col items-center relative animate-in zoom-in-95 duration-200">
@@ -1909,6 +1961,7 @@ export default function App() {
         {/* ... (User Manager remains unchanged) ... */}
         {currentView === 'user-manager' && user.role === 'admin' && (
            <div className="space-y-4">
+               {/* ... (Existing User Manager UI) ... */}
                {/* Header Navigation */}
                <div className="flex items-center mb-4">
                    <button onClick={() => setCurrentView('settings')} className="mr-3 p-2 rounded-full hover:bg-slate-100">
@@ -2125,12 +2178,15 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer Nav remains unchanged */}
+      {/* Footer Nav */}
       <nav className="bg-white border-t border-slate-200 flex justify-around items-center py-2 pb-safe flex-none shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-30">
         {!isGuest && (
             <TabButton active={currentView === 'camera'} onClick={() => setCurrentView('camera')} icon={<Camera />} label="Upload" color={systemConfig.themeColor} />
         )}
         <TabButton active={currentView === 'gallery'} onClick={() => setCurrentView('gallery')} icon={<Library />} label="Thư viện" color={systemConfig.themeColor} />
+        {!isGuest && (
+            <TabButton active={currentView === 'visitor-manager'} onClick={() => setCurrentView('visitor-manager')} icon={<HeartHandshake />} label="Thân nhân" color={systemConfig.themeColor} />
+        )}
         {!isGuest && (
             <TabButton active={currentView === 'history'} onClick={() => setCurrentView('history')} icon={<History />} label="Lịch sử" color={systemConfig.themeColor} />
         )}

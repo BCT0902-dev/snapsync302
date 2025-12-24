@@ -1,5 +1,5 @@
 
-import { AppConfig, User, SystemConfig, PhotoRecord, UploadStatus, CloudItem, SystemStats, QRCodeLog } from '../types';
+import { AppConfig, User, SystemConfig, PhotoRecord, UploadStatus, CloudItem, SystemStats, QRCodeLog, VisitorRecord } from '../types';
 import { INITIAL_USERS } from './mockAuth';
 
 // Cấu hình mặc định
@@ -168,6 +168,62 @@ export const saveQRCodeLog = async (log: QRCodeLog, config: AppConfig): Promise<
     });
     return true;
   } catch (error) { return false; }
+};
+
+// --- VISITOR MANAGEMENT ---
+// Lưu vào: SnapSync302/Visits/{unit_safe_name}_{yyyy_mm}.json
+export const fetchVisitors = async (config: AppConfig, unit: string, monthStr: string): Promise<VisitorRecord[]> => {
+    if (config.simulateMode) return [];
+    try {
+        const token = await getAccessToken();
+        const safeUnit = unit.replace(/[^a-zA-Z0-9]/g, '_');
+        const dbPath = `${config.targetFolder}/Visits/${safeUnit}_${monthStr}.json`;
+        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${dbPath}:/content`;
+        
+        const response = await fetch(endpoint, {
+             method: 'GET', headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (response.status === 404) return [];
+        if (!response.ok) throw new Error("Lỗi tải danh sách thân nhân");
+        
+        const data = await response.json();
+        return Array.isArray(data) ? data : [];
+    } catch (e) { return []; }
+};
+
+export const saveVisitor = async (config: AppConfig, unit: string, visitor: VisitorRecord): Promise<boolean> => {
+    if (config.simulateMode) {
+        alert("Đang ở chế độ mô phỏng, dữ liệu sẽ không được lưu thật.");
+        return true;
+    }
+    try {
+        const today = new Date();
+        const monthStr = `${today.getFullYear()}_${(today.getMonth() + 1).toString().padStart(2, '0')}`;
+        
+        // 1. Fetch current list
+        const currentList = await fetchVisitors(config, unit, monthStr);
+        
+        // 2. Append new record
+        const newList = [visitor, ...currentList];
+        
+        // 3. Save back
+        const token = await getAccessToken();
+        const safeUnit = unit.replace(/[^a-zA-Z0-9]/g, '_');
+        const dbPath = `${config.targetFolder}/Visits/${safeUnit}_${monthStr}.json`;
+        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${dbPath}:/content`;
+        
+        const response = await fetch(endpoint, {
+            method: 'PUT',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(newList, null, 2),
+        });
+        
+        return response.ok;
+    } catch (e) {
+        console.error("Save visitor failed", e);
+        return false;
+    }
 };
 
 export const uploadToOneDrive = async (

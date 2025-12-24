@@ -81,3 +81,14 @@ export interface QRCodeLog {
   createdDate: string; // ISO String
   link: string;
 }
+
+export interface VisitorRecord {
+  id: string;
+  soldierName: string;
+  soldierUnit: string;
+  visitorName: string;
+  relationship: string;
+  phone: string;
+  visitDate: string; // ISO String
+  status: 'pending' | 'approved' | 'completed';
+}
