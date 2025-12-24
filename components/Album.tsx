@@ -42,13 +42,14 @@ const GalleryItem = ({ item, isSelected, onToggleSelect, onClick }: {
             return;
         }
         
-        // Fallback: Nếu thumbnail lỗi, thử tải file gốc (Secure Load)
+        // Fallback: Nếu thumbnail lỗi, thử tải file gốc
         setIsRetrying(true);
         try {
-            const token = await getAccessToken();
-            const res = await fetch(item.downloadUrl, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
+            // Logic mới: Kiểm tra nếu là link Graph API thì cần token, ngược lại (OneDrive public link) thì KHÔNG được gửi token
+            const needsToken = item.downloadUrl.includes('graph.microsoft.com');
+            const headers = needsToken ? { 'Authorization': `Bearer ${await getAccessToken()}` } : {};
+
+            const res = await fetch(item.downloadUrl, { headers });
             if (res.ok) {
                 const blob = await res.blob();
                 const blobUrl = URL.createObjectURL(blob);
@@ -161,10 +162,28 @@ export const Album: React.FC<AlbumProps> = ({
         if (selectedItem.downloadUrl) {
             setIsHDLoading(true); // Hiển thị spinner nhỏ báo đang nét dần
             try {
-                const token = await getAccessToken();
-                const res = await fetch(selectedItem.downloadUrl, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
+                // QUAN TRỌNG: Không gửi Token nếu là link downloadUrl (thường là 1drv.com hoặc pre-signed)
+                const needsToken = selectedItem.downloadUrl.includes('graph.microsoft.com');
+                let headers = {};
+                
+                if (needsToken) {
+                     const token = await getAccessToken();
+                     headers = { 'Authorization': `Bearer ${token}` };
+                }
+
+                // Thử fetch lần 1 (theo logic trên)
+                let res = await fetch(selectedItem.downloadUrl, { headers });
+                
+                // Nếu lỗi 401/403 (Unauthorized) và ta chưa gửi token, thử lại BẰNG API Content endpoint
+                if (!res.ok && !needsToken) {
+                     // Fallback: Gọi API Content chính thức
+                     const token = await getAccessToken();
+                     const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${selectedItem.id}/content`;
+                     res = await fetch(contentUrl, {
+                         headers: { 'Authorization': `Bearer ${token}` }
+                     });
+                }
+
                 if (res.ok && isActive) {
                     const blob = await res.blob();
                     const hdUrl = URL.createObjectURL(blob);
@@ -246,10 +265,25 @@ export const Album: React.FC<AlbumProps> = ({
 
     try {
         setIsDownloading(true);
-        const token = await getAccessToken();
-        const response = await fetch(targetUrl, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        
+        // FIX: Logic download tương tự như View Full - Xử lý token thông minh
+        const needsToken = targetUrl.includes('graph.microsoft.com');
+        let headers = {};
+        if (needsToken) {
+             const token = await getAccessToken();
+             headers = { 'Authorization': `Bearer ${token}` };
+        }
+
+        let response = await fetch(targetUrl, { headers });
+
+        // Fallback retry nếu lỗi và chưa thử token
+        if (!response.ok && !needsToken) {
+             const token = await getAccessToken();
+             const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${selectedItem.id}/content`;
+             response = await fetch(contentUrl, {
+                 headers: { 'Authorization': `Bearer ${token}` }
+             });
+        }
         
         if (!response.ok) throw new Error("Download failed");
         
@@ -265,6 +299,7 @@ export const Album: React.FC<AlbumProps> = ({
         document.body.removeChild(link);
         window.URL.revokeObjectURL(blobUrl);
     } catch (error) {
+        // Fallback cuối cùng: Mở tab mới (nhưng cố gắng tránh)
         window.open(targetUrl, '_blank');
     } finally {
         setIsDownloading(false);
