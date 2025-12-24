@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { User, AppConfig, VisitorRecord } from '../types';
 import { fetchVisitors, updateVisitorStatus } from '../services/graphService';
@@ -6,7 +5,8 @@ import { QRCodeCanvas } from 'qrcode.react';
 import { Button } from './Button';
 import { 
   Users, QrCode, Download, Loader2, Calendar, Phone, User as UserIcon, 
-  MapPin, XCircle, FileSpreadsheet, FileCode, CheckCircle, Check, RefreshCw, ChevronLeft, ChevronRight
+  MapPin, XCircle, FileSpreadsheet, FileCode, CheckCircle, Check, RefreshCw, 
+  ChevronLeft, ChevronRight, Eye, Printer
 } from 'lucide-react';
 
 // @ts-ignore
@@ -22,11 +22,13 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
   const [visitors, setVisitors] = useState<VisitorRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false); // New State for Report Preview
   const [selectedVisitor, setSelectedVisitor] = useState<VisitorRecord | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
   
   // State for selected month (default to current month)
   const [viewDate, setViewDate] = useState(new Date());
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Generate view month string for data fetching (YYYY_MM)
   const viewMonthStr = `${viewDate.getFullYear()}_${(viewDate.getMonth() + 1).toString().padStart(2, '0')}`;
@@ -71,7 +73,8 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
       if (!selectedVisitor) return;
       setIsUpdating(true);
       try {
-          const success = await updateVisitorStatus(config, user.username, selectedVisitor.id, 'approved');
+          // Changed to pass the full visitor object so service can determine the file path (month)
+          const success = await updateVisitorStatus(config, user.username, selectedVisitor, 'approved');
           if (success) {
               // Update local state
               setVisitors(prev => prev.map(v => v.id === selectedVisitor.id ? { ...v, status: 'approved' } : v));
@@ -151,56 +154,82 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
       }
   };
 
-  const exportToHtml = () => {
-      const htmlContent = `
+  // Helper to generate HTML String (Used for both Download and Preview)
+  const getReportHtml = () => {
+      return `
+        <!DOCTYPE html>
         <html>
         <head>
             <meta charset="UTF-8">
+            <title>Báo cáo thăm thân</title>
             <style>
-                body { font-family: Arial, sans-serif; }
-                table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-                th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-                th { background-color: #f2f2f2; }
-                h2 { text-align: center; color: #059669; }
-                .meta { text-align: center; font-size: 0.9em; color: #666; margin-bottom: 20px; }
+                body { font-family: 'Times New Roman', Times, serif; padding: 20px; max-width: 1000px; margin: 0 auto; }
+                table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px; }
+                th, td { border: 1px solid #333; padding: 8px; text-align: left; vertical-align: middle; }
+                th { background-color: #f2f2f2; text-align: center; font-weight: bold; }
+                h2 { text-align: center; color: #000; margin-bottom: 5px; text-transform: uppercase; font-size: 18px; }
+                h3 { text-align: center; color: #333; margin-top: 0; font-size: 16px; font-weight: normal; }
+                .meta { text-align: center; font-size: 14px; color: #333; margin-bottom: 20px; font-style: italic; }
+                .status-pending { color: #d97706; font-weight: bold; }
+                .status-approved { color: #059669; font-weight: bold; }
+                .footer { margin-top: 40px; display: flex; justify-content: space-between; text-align: center; padding: 0 50px; }
+                .footer div { font-weight: bold; }
+                @media print {
+                    @page { margin: 1cm; size: landscape; }
+                    body { padding: 0; }
+                    th { background-color: #ddd !important; -webkit-print-color-adjust: exact; }
+                }
             </style>
         </head>
         <body>
             <h2>THỐNG KÊ DANH SÁCH ĐĂNG KÝ THĂM THÂN NHÂN</h2>
+            <h3>Đơn vị: ${user.unit.toUpperCase()}</h3>
             <div class="meta">
-                Đơn vị: ${user.unit} (User: ${user.username})<br/>
-                Tháng báo cáo: ${viewDate.getMonth() + 1}/${viewDate.getFullYear()}<br/>
-                Ngày xuất: ${new Date().toLocaleString('vi-VN')}
+                (Tháng ${viewDate.getMonth() + 1} năm ${viewDate.getFullYear()})
             </div>
             <table>
                 <thead>
                     <tr>
-                        <th>STT</th>
-                        <th>Thời gian</th>
+                        <th style="width: 50px">STT</th>
+                        <th style="width: 140px">Thời gian</th>
                         <th>Tên quân nhân</th>
                         <th>Người thăm</th>
                         <th>Quan hệ</th>
                         <th>SĐT</th>
-                        <th>Trạng thái</th>
+                        <th style="width: 100px">Trạng thái</th>
                     </tr>
                 </thead>
                 <tbody>
-                    ${visitors.map((v, idx) => `
+                    ${visitors.length > 0 ? visitors.map((v, idx) => `
                         <tr>
-                            <td>${idx + 1}</td>
+                            <td style="text-align: center">${idx + 1}</td>
                             <td>${new Date(v.visitDate).toLocaleString('vi-VN')}</td>
                             <td>${v.soldierName}</td>
                             <td>${v.visitorName}</td>
-                            <td>${v.relationship}</td>
-                            <td>${v.phone}</td>
-                            <td>${v.status === 'pending' ? 'Chờ duyệt' : 'Đã duyệt'}</td>
+                            <td style="text-align: center">${v.relationship}</td>
+                            <td style="text-align: center">${v.phone}</td>
+                            <td style="text-align: center" class="${v.status === 'pending' ? 'status-pending' : 'status-approved'}">
+                                ${v.status === 'pending' ? 'Chờ duyệt' : 'Đã duyệt'}
+                            </td>
                         </tr>
-                    `).join('')}
+                    `).join('') : `<tr><td colspan="7" style="text-align:center; padding: 20px">Không có dữ liệu</td></tr>`}
                 </tbody>
             </table>
+            <div class="footer">
+                <div></div>
+                <div>
+                    <p>Ngày ...... tháng ...... năm ......</p>
+                    <p>NGƯỜI LẬP BIỂU</p>
+                    <br><br><br>
+                </div>
+            </div>
         </body>
         </html>
       `;
+  };
+
+  const exportToHtml = () => {
+      const htmlContent = getReportHtml();
       const blob = new Blob([htmlContent], { type: 'text/html' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -209,6 +238,12 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+  };
+
+  const handlePrint = () => {
+      if (iframeRef.current && iframeRef.current.contentWindow) {
+          iframeRef.current.contentWindow.print();
+      }
   };
 
   return (
@@ -274,6 +309,10 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                         onChange={handleMonthChange}
                     />
                     <div className="h-6 w-px bg-slate-200 mx-1"></div>
+                    
+                    <button onClick={() => setShowReportModal(true)} className="p-2 text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100" title="Xem báo cáo">
+                        <Eye className="w-4 h-4" />
+                    </button>
                     <button onClick={exportToHtml} className="p-2 text-orange-600 bg-orange-50 rounded-lg hover:bg-orange-100" title="Xuất HTML">
                         <FileCode className="w-4 h-4" />
                     </button>
@@ -329,6 +368,48 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                     <p className="mt-6 font-bold text-lg text-slate-800">Quét để đăng ký</p>
                     <p className="text-slate-500 text-sm">{user.unit}</p>
                     <p className="text-emerald-600 font-bold mt-2">Tháng {viewDate.getMonth() + 1}/{viewDate.getFullYear()}</p>
+                </div>
+            </div>
+        )}
+        
+        {/* REPORT PREVIEW MODAL */}
+        {showReportModal && (
+            <div className="fixed inset-0 z-[90] bg-slate-900/95 backdrop-blur-sm flex items-center justify-center p-2 sm:p-6 animate-in fade-in duration-200">
+                <div className="bg-white w-full h-full max-w-5xl rounded-xl flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95">
+                    {/* Toolbar */}
+                    <div className="flex justify-between items-center p-3 border-b border-slate-200 bg-slate-50">
+                        <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-700">Xem trước Báo cáo</span>
+                            <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">HTML</span>
+                        </div>
+                        <div className="flex gap-2">
+                            <button 
+                                onClick={handlePrint}
+                                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-bold flex items-center gap-2 transition-colors"
+                            >
+                                <Printer className="w-4 h-4" />
+                                In
+                            </button>
+                            <button 
+                                onClick={() => setShowReportModal(false)}
+                                className="p-1.5 hover:bg-slate-200 rounded-lg text-slate-500 transition-colors"
+                            >
+                                <XCircle className="w-6 h-6" />
+                            </button>
+                        </div>
+                    </div>
+                    
+                    {/* Content */}
+                    <div className="flex-1 bg-slate-100 p-0 sm:p-4 overflow-hidden">
+                        <div className="h-full w-full bg-white shadow-sm sm:rounded-lg overflow-hidden mx-auto max-w-4xl border border-slate-200">
+                            <iframe 
+                                ref={iframeRef}
+                                srcDoc={getReportHtml()}
+                                className="w-full h-full border-0"
+                                title="Report Preview"
+                            />
+                        </div>
+                    </div>
                 </div>
             </div>
         )}
