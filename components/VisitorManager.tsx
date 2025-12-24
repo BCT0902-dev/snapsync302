@@ -6,8 +6,11 @@ import { QRCodeCanvas } from 'qrcode.react';
 import { Button } from './Button';
 import { 
   Users, QrCode, Download, Loader2, Calendar, Phone, User as UserIcon, 
-  MapPin, XCircle, FileSpreadsheet, FileCode, CheckCircle, Check
+  MapPin, XCircle, FileSpreadsheet, FileCode, CheckCircle, Check, RefreshCw
 } from 'lucide-react';
+
+// @ts-ignore
+import * as XLSX from 'xlsx';
 
 interface VisitorManagerProps {
   user: User;
@@ -32,10 +35,17 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
 
   useEffect(() => {
     loadVisitors();
+    
+    // Auto refresh every 30 seconds
+    const intervalId = setInterval(() => {
+        loadVisitors(true); // silent reload
+    }, 30000);
+
+    return () => clearInterval(intervalId);
   }, [user.username]);
 
-  const loadVisitors = async () => {
-    setIsLoading(true);
+  const loadVisitors = async (silent = false) => {
+    if (!silent) setIsLoading(true);
     try {
         const data = await fetchVisitors(config, user.username, currentMonthStr);
         // Sort by date desc
@@ -43,7 +53,7 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
     } catch (e) {
         console.error(e);
     } finally {
-        setIsLoading(false);
+        if (!silent) setIsLoading(false);
     }
   };
 
@@ -70,44 +80,65 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
   };
 
   const exportToExcel = () => {
-      // Create BOM for UTF-8 support in Excel
-      const BOM = "\uFEFF";
-      
-      const title = `Thống kê danh sách đăng ký thăm quân nhân ${user.unit}`;
-      const dateRow = `Ngày tháng: Tháng ${today.getMonth() + 1}/${today.getFullYear()},`;
-      
-      const headers = ["STT", "Ngày đăng ký", "Tên quân nhân", "Đơn vị", "Người thăm", "Quan hệ", "SĐT", "Trạng thái"];
-      
-      // Escape function for CSV fields - Fixed to accept number
-      const escape = (val: string | number) => `"${String(val).replace(/"/g, '""')}"`;
+      try {
+          // Prepare Data
+          const title = `THỐNG KÊ DANH SÁCH ĐĂNG KÝ THĂM THÂN NHÂN ${user.unit.toUpperCase()}`;
+          const dateInfo = `Ngày tháng: Tháng ${today.getMonth() + 1}/${today.getFullYear()}`;
+          
+          const headers = ["STT", "Ngày đăng ký", "Tên quân nhân", "Đơn vị", "Người thăm", "Quan hệ", "SĐT", "Trạng thái"];
+          
+          const dataRows = visitors.map((v, idx) => [
+              idx + 1,
+              new Date(v.visitDate).toLocaleString('vi-VN'),
+              v.soldierName,
+              v.soldierUnit,
+              v.visitorName,
+              v.relationship,
+              v.phone,
+              v.status === 'pending' ? 'Chờ duyệt' : 'Đã duyệt'
+          ]);
 
-      const rows = visitors.map((v, idx) => [
-          idx + 1,
-          new Date(v.visitDate).toLocaleString('vi-VN'),
-          v.soldierName,
-          v.soldierUnit,
-          v.visitorName,
-          v.relationship,
-          `'${v.phone}`, // Force string for phone
-          v.status === 'pending' ? 'Chờ duyệt' : 'Đã duyệt'
-      ].map(escape).join(","));
-      
-      // Construct CSV content with correct newlines
-      const csvContent = BOM + 
-          escape(title) + "\r\n" + 
-          escape(dateRow) + "\r\n" + 
-          "\r\n" + // Empty row
-          headers.map(escape).join(",") + "\r\n" + 
-          rows.join("\r\n");
+          // Combine into a worksheet data array (Array of Arrays)
+          const wsData = [
+              [title],           // Row 1: Title
+              [dateInfo],        // Row 2: Date
+              [],                // Row 3: Empty
+              headers,           // Row 4: Headers
+              ...dataRows        // Row 5+: Data
+          ];
 
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.setAttribute("download", `DS_ThamThan_${user.username}_${currentMonthStr}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+          // Create Worksheet
+          const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+          // Merge Title Cells (A1:H1) and Date Cells (A2:H2)
+          if(!ws['!merges']) ws['!merges'] = [];
+          ws['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } });
+          ws['!merges'].push({ s: { r: 1, c: 0 }, e: { r: 1, c: 7 } });
+
+          // Set Column Widths (Optional but good for UX)
+          ws['!cols'] = [
+              { wch: 5 },  // STT
+              { wch: 20 }, // Time
+              { wch: 20 }, // Soldier
+              { wch: 20 }, // Unit
+              { wch: 20 }, // Visitor
+              { wch: 10 }, // Relation
+              { wch: 15 }, // Phone
+              { wch: 15 }  // Status
+          ];
+
+          // Create Workbook and append sheet
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, "DanhSach");
+
+          // Write file
+          const fileName = `DS_ThamThan_${user.username}_${currentMonthStr}.xlsx`;
+          XLSX.writeFile(wb, fileName);
+
+      } catch (e) {
+          console.error("Export Excel Error:", e);
+          alert("Lỗi khi xuất file Excel. Vui lòng thử lại.");
+      }
   };
 
   const exportToHtml = () => {
@@ -206,15 +237,25 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
         {/* Visitors List */}
         <div>
             <div className="flex justify-between items-center mb-4">
-                <h4 className="font-bold text-slate-700 flex items-center">
-                    <Calendar className="w-4 h-4 mr-2 text-slate-500" />
-                    Danh sách đăng ký ({visitors.length})
-                </h4>
+                <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-slate-700 flex items-center">
+                        <Calendar className="w-4 h-4 mr-2 text-slate-500" />
+                        Danh sách ({visitors.length})
+                    </h4>
+                    <button 
+                        onClick={() => loadVisitors()} 
+                        className={`p-1.5 rounded-full hover:bg-slate-100 text-slate-500 ${isLoading ? 'animate-spin' : ''}`}
+                        title="Làm mới"
+                    >
+                        <RefreshCw className="w-4 h-4" />
+                    </button>
+                </div>
+
                 <div className="flex gap-2">
                     <button onClick={exportToHtml} className="p-2 text-orange-600 bg-orange-50 rounded-lg hover:bg-orange-100" title="Xuất HTML">
                         <FileCode className="w-4 h-4" />
                     </button>
-                    <button onClick={exportToExcel} className="p-2 text-green-600 bg-green-50 rounded-lg hover:bg-green-100" title="Xuất Excel">
+                    <button onClick={exportToExcel} className="p-2 text-green-600 bg-green-50 rounded-lg hover:bg-green-100" title="Xuất Excel (.xlsx)">
                         <FileSpreadsheet className="w-4 h-4" />
                     </button>
                 </div>
