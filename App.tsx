@@ -1,18 +1,19 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { User, PhotoRecord, UploadStatus, AppConfig, SystemConfig, CloudItem, SystemStats } from './types';
+import { User, PhotoRecord, UploadStatus, AppConfig, SystemConfig, CloudItem, SystemStats, QRCodeLog } from './types';
 import { INITIAL_USERS, login } from './services/mockAuth';
 import { 
   uploadToOneDrive, fetchUsersFromOneDrive, saveUsersToOneDrive, 
   listUserMonthFolders, listFilesInMonthFolder, createShareLink,
   fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles, fetchUserDeletedItems,
   getAccessToken, listPathContents, fetchSystemStats, fetchAllMedia, deleteFileFromOneDrive,
-  renameOneDriveItem, aggregateUserStats, moveOneDriveItem, fetchFolderChildren
+  renameOneDriveItem, aggregateUserStats, moveOneDriveItem, fetchFolderChildren,
+  fetchQRCodeLogs, saveQRCodeLog
 } from './services/graphService';
 import { Button } from './components/Button';
 import { Album } from './components/Album';
 import { Statistics } from './components/Statistics';
-import { QRCodeSVG } from 'qrcode.react';
+import { QRCodeCanvas } from 'qrcode.react';
 import { 
   Camera, LogOut, Info, Settings, History, CheckCircle, XCircle, 
   Loader2, Image as ImageIcon, Users, Trash2, Plus, Edit,
@@ -20,7 +21,7 @@ import {
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
   BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock, Globe,
-  FolderLock, ChevronDown, QrCode
+  FolderLock, ChevronDown, QrCode, ExternalLink
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -120,6 +121,10 @@ export default function App() {
   const [qrModalData, setQrModalData] = useState<{name: string, link: string} | null>(null);
   const [isGeneratingQR, setIsGeneratingQR] = useState(false);
 
+  // QR Code Admin Management State
+  const [qrLogs, setQrLogs] = useState<QRCodeLog[]>([]);
+  const [isLoadingQrLogs, setIsLoadingQrLogs] = useState(false);
+
   // System Config State (For Admin Edit)
   const [tempSysConfig, setTempSysConfig] = useState<SystemConfig>(systemConfig); // Init from state
   const [isSavingConfig, setIsSavingConfig] = useState(false);
@@ -146,6 +151,7 @@ export default function App() {
   const multiFileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
+  const qrRef = useRef<HTMLDivElement>(null); // Ref for QR download
 
   // --- HELPER CONSTANT FOR GUEST ---
   // Kiểm tra nếu là user thannhan thì coi là guest
@@ -216,18 +222,26 @@ export default function App() {
     if (currentView === 'settings' && user?.role === 'admin') {
       const loadStats = async () => {
         setIsStatsLoading(true);
+        setIsLoadingQrLogs(true);
         try {
-           const cloudStats = await fetchSystemStats(config);
+           const [cloudStats, logs] = await Promise.all([
+             fetchSystemStats(config),
+             fetchQRCodeLogs(config)
+           ]);
+           
            setStats({
                totalUsers: usersList.length,
                activeUsers: usersList.filter(u => u.status === 'active' || u.status === undefined).length, // Mặc định là active nếu ko có status
                totalFiles: cloudStats.totalFiles || 0,
                totalStorage: cloudStats.totalStorage || 0
            });
+           setQrLogs(logs);
+
         } catch (e) {
             console.error(e);
         } finally {
             setIsStatsLoading(false);
+            setIsLoadingQrLogs(false);
         }
       };
       loadStats();
@@ -825,13 +839,47 @@ export default function App() {
       if (!user) return;
       setIsGeneratingQR(true);
       try {
-          // Tạo link share ẩn danh (Public)
+          // 1. Tạo link share ẩn danh (Public)
           const link = await createShareLink(config, item.id);
+          
+          // 2. Lưu log cho Admin
+          const logData: QRCodeLog = {
+              id: Date.now().toString(),
+              fileId: item.id,
+              fileName: item.name,
+              createdBy: user.displayName,
+              createdDate: new Date().toISOString(),
+              link: link
+          };
+          saveQRCodeLog(logData, config); // Fire and forget save
+          
+          // 3. Show Modal
           setQrModalData({ name: item.name, link: link });
       } catch (e: any) {
           alert("Không thể tạo mã QR: " + e.message);
       } finally {
           setIsGeneratingQR(false);
+      }
+  };
+  
+  // Logic tạo QR khi chọn 1 item trong Gallery
+  const handleGenerateQRForSelection = () => {
+      if (selectedGalleryIds.size !== 1) return;
+      const itemId = Array.from(selectedGalleryIds)[0];
+      const item = galleryItems.find(i => i.id === itemId);
+      if (item) handleShowQR(item);
+  };
+  
+  const handleDownloadQRImage = () => {
+      const canvas = qrRef.current?.querySelector('canvas');
+      if (canvas && qrModalData) {
+          const url = canvas.toDataURL("image/png");
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `QR_${qrModalData.name.replace(/\s+/g, '_')}.png`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
       }
   };
 
@@ -1386,6 +1434,7 @@ export default function App() {
 
         {currentView === 'history' && !isGuest && (
           <div className="space-y-4">
+             {/* ... (History View content) ... */}
              <h3 className="font-bold text-slate-800 text-lg mb-2">Lịch sử hoạt động</h3>
              
              {/* History Tabs */}
@@ -1616,6 +1665,17 @@ export default function App() {
                         <span className="text-sm font-medium text-slate-700">Đã chọn</span>
                     </div>
                     <div className="flex gap-2">
+                         {/* QR Button: Chỉ hiện khi chọn đúng 1 item */}
+                         {selectedGalleryIds.size === 1 && (
+                            <button 
+                                onClick={handleGenerateQRForSelection} 
+                                className="bg-emerald-50 text-emerald-600 px-3 py-2 rounded-lg font-bold text-xs flex items-center hover:bg-emerald-100 border border-emerald-200"
+                            >
+                                {isGeneratingQR ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <QrCode className="w-4 h-4 mr-1" />}
+                                QR Code
+                            </button>
+                         )}
+
                          {isPendingFolder && user.role === 'admin' && (
                             <button 
                                 onClick={handleBulkApprove} 
@@ -1663,28 +1723,42 @@ export default function App() {
                     
                     <h3 className="font-bold text-lg text-slate-800 mb-1 text-center">Mã QR Truy cập nhanh</h3>
                     <p className="text-xs text-slate-500 mb-6 text-center px-4">
-                        Khách có thể quét mã này để xem "{qrModalData.name}" mà không cần đăng nhập.
+                        Khách có thể quét mã này để xem mà không cần đăng nhập.
                     </p>
                     
-                    <div className="bg-white p-4 rounded-xl shadow-inner border border-slate-200">
-                        <QRCodeSVG value={qrModalData.link} size={200} />
+                    {/* QR Code Container */}
+                    <div ref={qrRef} className="bg-white p-6 rounded-xl shadow-inner border border-slate-200 flex flex-col items-center">
+                        <QRCodeCanvas 
+                            value={qrModalData.link} 
+                            size={220} 
+                            level={"H"} // High Error Correction for Logo
+                            imageSettings={{
+                                src: systemConfig.logoUrl || "/logo302.svg",
+                                x: undefined,
+                                y: undefined,
+                                height: 40,
+                                width: 40,
+                                excavate: true,
+                            }}
+                        />
+                        <p className="mt-4 font-bold text-slate-800 text-center max-w-[200px] break-words text-sm">
+                            {qrModalData.name}
+                        </p>
                     </div>
                     
-                    <p className="text-xs font-mono text-slate-400 mt-4 break-all text-center line-clamp-2">
-                        {qrModalData.link}
-                    </p>
-
                     <button 
-                        onClick={() => setQrModalData(null)}
-                        className="mt-6 w-full py-3 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 transition-colors"
+                        onClick={handleDownloadQRImage}
+                        className="mt-6 w-full py-3 rounded-xl text-white font-bold text-sm shadow-lg hover:opacity-90 flex items-center justify-center transition-all"
+                        style={buttonStyle}
                     >
-                        Đóng
+                        <Download className="w-4 h-4 mr-2" />
+                        Tải ảnh QR
                     </button>
                 </div>
             </div>
         )}
 
-        {/* ... (Settings and User Manager views remain unchanged) ... */}
+        {/* ... (Settings and User Manager views) ... */}
         {currentView === 'settings' && user.role === 'admin' && !isGuest && (
           <div className="space-y-6">
             <h3 className="font-bold text-slate-800 text-xl flex items-center">
@@ -1692,13 +1766,53 @@ export default function App() {
               Quản trị hệ thống
             </h3>
             
-             {/* STATISTICS DASHBOARD (NEW) */}
+             {/* STATISTICS DASHBOARD */}
              <div>
                 <h4 className="font-bold text-slate-700 flex items-center mb-4 pb-2">
                    <BarChart3 className="w-4 h-4 mr-2 text-slate-500" />
                    Thống kê hệ thống
                 </h4>
                 <Statistics stats={stats} isLoading={isStatsLoading} color={systemConfig.themeColor} />
+             </div>
+
+             {/* QR MANAGEMENT SECTION (NEW) */}
+             <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                <h4 className="font-bold text-slate-700 flex items-center mb-4 border-b border-slate-100 pb-2">
+                   <QrCode className="w-4 h-4 mr-2 text-slate-500" />
+                   Quản lý Mã QR
+                </h4>
+                <div className="space-y-4">
+                    <p className="text-xs text-slate-500">Danh sách các file đã được tạo mã QR (Public Link).</p>
+                    
+                    {isLoadingQrLogs ? (
+                        <div className="text-center py-4 text-slate-400"><Loader2 className="w-6 h-6 mx-auto animate-spin" /></div>
+                    ) : qrLogs.length === 0 ? (
+                        <div className="text-center py-6 text-slate-400 text-xs italic">Chưa có mã QR nào được tạo.</div>
+                    ) : (
+                        <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                            {qrLogs.map(log => (
+                                <div key={log.id} className="bg-slate-50 p-3 rounded-lg border border-slate-100 text-xs flex justify-between items-start">
+                                    <div className="min-w-0 pr-2">
+                                        <p className="font-bold text-slate-700 truncate">{log.fileName}</p>
+                                        <p className="text-slate-500 mt-0.5">Tạo bởi: {log.createdBy}</p>
+                                        <p className="text-[10px] text-slate-400 mt-0.5">
+                                            {new Date(log.createdDate).toLocaleString('vi-VN')}
+                                        </p>
+                                    </div>
+                                    <a 
+                                        href={log.link} 
+                                        target="_blank" 
+                                        rel="noreferrer"
+                                        className="p-1.5 bg-white border border-slate-200 rounded text-blue-600 hover:bg-blue-50"
+                                        title="Mở link"
+                                    >
+                                        <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
              </div>
 
              {/* NAVIGATION TO USER MANAGER */}
@@ -1792,6 +1906,7 @@ export default function App() {
           </div>
         )}
 
+        {/* ... (User Manager remains unchanged) ... */}
         {currentView === 'user-manager' && user.role === 'admin' && (
            <div className="space-y-4">
                {/* Header Navigation */}
@@ -1918,7 +2033,7 @@ export default function App() {
            </div>
         )}
 
-        {/* --- PERMISSION MODAL --- */}
+        {/* ... (Permission Modal remains unchanged) ... */}
         {showPermissionModal && permissionTargetUser && (
             <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
                 <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full max-h-[80vh] flex flex-col">
@@ -2010,6 +2125,7 @@ export default function App() {
         )}
       </main>
 
+      {/* Footer Nav remains unchanged */}
       <nav className="bg-white border-t border-slate-200 flex justify-around items-center py-2 pb-safe flex-none shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-30">
         {!isGuest && (
             <TabButton active={currentView === 'camera'} onClick={() => setCurrentView('camera')} icon={<Camera />} label="Upload" color={systemConfig.themeColor} />

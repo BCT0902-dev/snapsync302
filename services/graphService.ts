@@ -1,5 +1,5 @@
 
-import { AppConfig, User, SystemConfig, PhotoRecord, UploadStatus, CloudItem, SystemStats } from '../types';
+import { AppConfig, User, SystemConfig, PhotoRecord, UploadStatus, CloudItem, SystemStats, QRCodeLog } from '../types';
 import { INITIAL_USERS } from './mockAuth';
 
 // Cấu hình mặc định
@@ -128,6 +128,46 @@ export const fetchSystemStats = async (config: AppConfig): Promise<Partial<Syste
         }
         return { totalStorage: totalStorage, totalFiles: fileCount };
     } catch (e) { return { totalFiles: 0, totalStorage: 0 }; }
+};
+
+// --- QR CODE LOGS ---
+export const fetchQRCodeLogs = async (config: AppConfig): Promise<QRCodeLog[]> => {
+  if (config.simulateMode) return [];
+  try {
+    const token = await getAccessToken();
+    const dbPath = `${config.targetFolder}/System/qrcodes.json`;
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${dbPath}:/content`;
+    const response = await fetch(endpoint, {
+      method: 'GET', headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (response.status === 404) return [];
+    if (!response.ok) throw new Error("Lỗi tải lịch sử QR");
+    const data = await response.json();
+    return Array.isArray(data) ? data : [];
+  } catch (error) { return []; }
+};
+
+export const saveQRCodeLog = async (log: QRCodeLog, config: AppConfig): Promise<boolean> => {
+  if (config.simulateMode) return true;
+  try {
+    const currentLogs = await fetchQRCodeLogs(config);
+    // Kiểm tra trùng lặp cơ bản: cùng fileId và link
+    const exists = currentLogs.some(l => l.fileId === log.fileId && l.link === log.link);
+    if (exists) return true; // Đã tồn tại log, không cần lưu lại
+
+    const newLogs = [log, ...currentLogs];
+    
+    const token = await getAccessToken();
+    const dbPath = `${config.targetFolder}/System/qrcodes.json`;
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${dbPath}:/content`;
+    
+    await fetch(endpoint, {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(newLogs, null, 2),
+    });
+    return true;
+  } catch (error) { return false; }
 };
 
 export const uploadToOneDrive = async (
@@ -321,95 +361,64 @@ export const fetchFolderChildren = async (config: AppConfig, folderId: string): 
     }
 };
 
-// --- START NEW LOGIC FOR HISTORY AND PERMISSIONS ---
+// --- NEW IMPLEMENTATIONS FOR MISSING EXPORTS ---
+
+export const createShareLink = async (config: AppConfig, itemId: string): Promise<string> => {
+  if (config.simulateMode) return "https://onedrive.live.com/redir?mock-link";
+  try {
+    const token = await getAccessToken();
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/createLink`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'view', scope: 'anonymous' })
+    });
+    if (!response.ok) throw new Error("Create link failed");
+    const data = await response.json();
+    return data.link.webUrl;
+  } catch (error) { throw error; }
+};
+
+const mapCloudItemToPhotoRecord = (item: any, status: UploadStatus = UploadStatus.SUCCESS): PhotoRecord => {
+  return {
+    id: item.id,
+    fileName: item.name,
+    previewUrl: item.thumbnails?.[0]?.medium?.url || item['@microsoft.graph.downloadUrl'],
+    uploadedUrl: item.webUrl,
+    status: status,
+    timestamp: new Date(item.createdDateTime),
+    size: item.size,
+    mimeType: item.file?.mimeType,
+    deletedDate: item.deleted ? new Date(item.lastModifiedDateTime) : undefined
+  };
+};
 
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
   if (config.simulateMode) return [];
-
   try {
     const token = await getAccessToken();
-    const now = new Date();
+    const rootPath = config.targetFolder;
+    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='${user.username}')?select=id,name,webUrl,createdDateTime,lastModifiedDateTime,size,file,thumbnails,@microsoft.graph.downloadUrl&expand=thumbnails&top=200`;
     
-    // 1. Xác định các đường dẫn chính xác nơi file vừa được upload
-    // Thay vì quét tất cả, ta quét chính xác thư mục TUẦN HIỆN TẠI và Tư liệu chung
-    const pathsToCheck: string[] = [];
-
-    // Path A: Personal Folder (Tuần hiện tại & Tuần trước để đảm bảo)
-    const currentMonthNum = now.getMonth() + 1;
-    const monthStr = `T${currentMonthNum.toString().padStart(2, '0')}`;
-    const day = now.getDate();
-    const currentWeekNum = Math.min(4, Math.ceil(day / 7));
-    const weekStr = `Tuần_${currentWeekNum}`;
+    const response = await fetch(endpoint, { headers: { 'Authorization': `Bearer ${token}` } });
+    if (!response.ok) return [];
     
-    const unitFolder = getUnitFolderName(user.unit);
+    const data = await response.json();
+    const items = data.value || [];
     
-    // Scan Tuần hiện tại
-    pathsToCheck.push(`${config.targetFolder}/${unitFolder}/${monthStr}/${weekStr}`);
-    
-    // Scan thư mục "Tư liệu chung"
-    pathsToCheck.push(`${config.targetFolder}/Tu_lieu_chung`);
+    const twoMonthsAgo = new Date();
+    twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
 
-    // Scan thư mục "Chờ duyệt" (nếu có)
-    pathsToCheck.push(`${config.targetFolder}/Tu_lieu_chung_Cho_duyet`);
-    
-    // Hàm fetch children trực tiếp (Nhanh và Realtime)
-    const fetchChildrenFromPath = async (searchPath: string): Promise<any[]> => {
-        // Sử dụng endpoint children thay vì search
-        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${searchPath}:/children?select=id,name,webUrl,createdDateTime,size,file,parentReference&expand=thumbnails&top=200`;
-        
-        try {
-            const res = await fetch(endpoint, { headers: { 'Authorization': `Bearer ${token}` } });
-            if (res.status === 404) return []; // Thư mục chưa được tạo
-            if (!res.ok) return []; 
-            const data = await res.json();
-            return data.value || [];
-        } catch { return []; }
-    };
+    return items
+      .filter((item: any) => 
+          item.file && 
+          item.name.toLowerCase().startsWith(user.username.toLowerCase()) && 
+          new Date(item.createdDateTime) > twoMonthsAgo
+      )
+      .map((item: any) => mapCloudItemToPhotoRecord(item))
+      .sort((a: PhotoRecord, b: PhotoRecord) => b.timestamp.getTime() - a.timestamp.getTime());
 
-    // Chạy song song
-    const results = await Promise.all(pathsToCheck.map(p => fetchChildrenFromPath(p)));
-    const allFiles = results.flat();
-
-    const userPrefix = `${user.username}_`;
-    
-    const records: PhotoRecord[] = allFiles
-      .filter((item: any) => item.file && item.name.startsWith(userPrefix))
-      .map((item: any) => {
-        let thumbnailUrl = '';
-        if (item.thumbnails && item.thumbnails.length > 0) {
-          thumbnailUrl = item.thumbnails[0].medium?.url || item.thumbnails[0].large?.url || item.thumbnails[0].small?.url || '';
-        }
-
-        // Xác định trạng thái dựa trên thư mục cha
-        let status = UploadStatus.SUCCESS;
-        let errorMsg = undefined;
-        // Kiểm tra đơn giản: nếu trong thư mục cha có tên "Cho_duyet"
-        if (item.parentReference?.path?.includes('Cho_duyet')) {
-            errorMsg = "Chờ duyệt";
-        }
-
-        return {
-          id: item.id,
-          fileName: item.name,
-          status: status,
-          errorMessage: errorMsg,
-          uploadedUrl: item.webUrl,
-          timestamp: new Date(item.createdDateTime),
-          size: item.size,
-          previewUrl: thumbnailUrl,
-          mimeType: item.file?.mimeType,
-          views: 0,
-          downloads: 0
-        };
-      });
-
-    // Sort mới nhất lên đầu
-    return records.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-
-  } catch (error) {
-    console.error("Fetch Recent Files Error:", error);
-    return [];
-  }
+  } catch (error) { return []; }
 };
 
 export const fetchUserDeletedItems = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
@@ -420,145 +429,45 @@ export const fetchUserDeletedItems = async (config: AppConfig, user: User): Prom
         const response = await fetch(endpoint, { headers: { 'Authorization': `Bearer ${token}` } });
         if (!response.ok) return [];
         const data = await response.json();
-        const userPrefix = `${user.username}_`;
-        const records: PhotoRecord[] = data.value
-            .filter((item: any) => item.name.startsWith(userPrefix)) 
+        
+        return (data.value || [])
+            .filter((item: any) => item.name && item.name.toLowerCase().startsWith(user.username.toLowerCase()))
             .map((item: any) => ({
-                id: item.id,
-                fileName: item.name,
-                status: UploadStatus.ERROR, 
-                timestamp: new Date(item.lastModifiedDateTime),
-                deletedDate: new Date(item.deleted?.deletedDateTime || new Date()),
-                size: item.size,
-                mimeType: 'deleted',
-                uploadedUrl: ''
+                ...mapCloudItemToPhotoRecord(item, UploadStatus.IDLE),
+                deletedDate: new Date(item.lastModifiedDateTime)
             }));
-        return records;
-    } catch (e) {
-        return [];
-    }
+    } catch(e) { return []; }
 };
 
-/**
- * GALLERY UPDATE (Fix 1): Ẩn thư mục lạ
- */
-export const listPathContents = async (config: AppConfig, relativePath: string = "", user?: User): Promise<CloudItem[]> => {
-  if (config.simulateMode) {
-    if (relativePath === "") return [{ id: '1', name: 'Sư đoàn 302', folder: {childCount: 1}, webUrl: '#', lastModifiedDateTime: new Date().toISOString(), size: 0 }];
-    return [];
-  }
+export const listPathContents = async (config: AppConfig, path: string, user?: User): Promise<CloudItem[]> => {
+    if (config.simulateMode) return [];
+    try {
+        const token = await getAccessToken();
+        const rootPath = config.targetFolder;
+        let fullPath = path ? `${rootPath}/${path}` : rootPath;
+        fullPath = fullPath.replace(/^\//, '');
 
-  try {
-    const token = await getAccessToken();
-    let path = config.targetFolder;
-    if (relativePath) {
-      path += `/${relativePath}`;
+        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${fullPath}:/children?select=id,name,folder,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&expand=thumbnails&top=200`;
+        
+        const response = await fetch(endpoint, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (!response.ok) throw new Error("List path failed");
+        
+        const data = await response.json();
+        return (data.value || []).map((item: any) => ({
+            id: item.id,
+            name: item.name,
+            folder: item.folder,
+            file: item.file,
+            webUrl: item.webUrl,
+            lastModifiedDateTime: item.lastModifiedDateTime,
+            size: item.size,
+            thumbnailUrl: item.thumbnails?.[0]?.medium?.url,
+            downloadUrl: item['@microsoft.graph.downloadUrl']
+        }));
+    } catch (e) { 
+        console.error("List Contents Error", e);
+        return []; 
     }
-
-    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/children?expand=thumbnails`;
-    const response = await fetch(endpoint, {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-
-    if (response.status === 404) return [];
-    if (!response.ok) throw new Error("Lỗi tải dữ liệu thư mục");
-
-    const data = await response.json();
-    
-    let items = data.value.map((item: any) => {
-       let thumb = "";
-       if (item.thumbnails && item.thumbnails.length > 0) {
-         thumb = item.thumbnails[0].large?.url || item.thumbnails[0].medium?.url || item.thumbnails[0].small?.url;
-       }
-       return {
-         id: item.id,
-         name: item.name,
-         folder: item.folder,
-         file: item.file,
-         webUrl: item.webUrl,
-         lastModifiedDateTime: item.lastModifiedDateTime,
-         size: item.size,
-         thumbnailUrl: thumb,
-         downloadUrl: item['@microsoft.graph.downloadUrl'],
-         views: 0,
-         downloads: 0
-       } as CloudItem;
-    });
-
-    // --- PERMISSION LOGIC ---
-    if (user && user.role !== 'admin') {
-        const SYSTEM_HIDDEN = ['system', 'bo_chi_huy'];
-        items = items.filter((i: CloudItem) => !SYSTEM_HIDDEN.includes(i.name.toLowerCase()));
-
-        if (relativePath === "") {
-            // ROOT LEVEL RESTRICTION
-            // Chỉ hiển thị:
-            // 1. "Tu_lieu_chung"
-            // 2. Folder đúng với Đơn vị của User
-            // 3. Folder được cấp quyền (allowedPaths)
-            
-            const userUnitFolderName = getUnitFolderName(user.unit).split('/').pop()?.toLowerCase(); 
-
-            items = items.filter((i: CloudItem) => {
-                const name = i.name.toLowerCase();
-                const rawName = i.name; // Tên gốc để check allowedPaths (case-sensitive or not)
-
-                // 1. Luôn hiện Tư liệu chung
-                if (name === 'tu_lieu_chung') return true;
-                
-                // Ẩn folder Chờ duyệt
-                if (name === 'tu_lieu_chung_cho_duyet') return false;
-                
-                // Ẩn folder Admin system
-                if (name === 'quan_tri_vien') return false;
-
-                // 2. Folder đơn vị của User
-                if (name === userUnitFolderName) return true;
-
-                // 3. Folder được cấp quyền riêng (Check allowedPaths)
-                if (user.allowedPaths && user.allowedPaths.includes(rawName)) return true;
-
-                // Nếu không thuộc các trường hợp trên -> ẨN
-                return false; 
-            });
-        }
-    }
-
-    return items;
-
-  } catch (error) {
-    console.error("Gallery Fetch Error:", error);
-    return [];
-  }
-};
-
-export const createShareLink = async (config: AppConfig, itemId: string) => {
-  if (config.simulateMode) return "https://mock-share-link.com";
-  try {
-    const token = await getAccessToken();
-    const endpoint = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/createLink`;
-    const body = { type: 'view', scope: 'anonymous' };
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const data = await response.json();
-    if (!response.ok) {
-        if (data.error?.code === 'notAllowed') {
-            const retryRes = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type: 'view', scope: 'organization' })
-            });
-            const retryData = await retryRes.json();
-            if (retryRes.ok) return retryData.link.webUrl;
-        }
-        throw new Error(data.error?.message || "Không thể tạo link chia sẻ");
-    }
-    return data.link.webUrl;
-  } catch (error) { throw error; }
 };
 
 export const fetchAllMedia = async (config: AppConfig, user: User): Promise<CloudItem[]> => {
@@ -566,74 +475,50 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
     try {
         const token = await getAccessToken();
         const rootPath = config.targetFolder;
-        const rootEndpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}`;
-        const rootRes = await fetch(rootEndpoint, { headers: { 'Authorization': `Bearer ${token}` } });
-        if (!rootRes.ok) throw new Error("Root not found");
-        const rootData = await rootRes.json();
-        const results: CloudItem[] = [];
-        await crawlFolderRecursive(token, rootData.id, results, user);
-        return results;
-    } catch (error) { return []; }
+        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${rootPath}:/search(q='')?select=id,name,folder,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&expand=thumbnails&top=500`;
+        
+        const response = await fetch(endpoint, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (!response.ok) return [];
+        
+        const data = await response.json();
+        return (data.value || [])
+            .filter((item: any) => item.file)
+            .map((item: any) => ({
+                id: item.id,
+                name: item.name,
+                folder: item.folder,
+                file: item.file,
+                webUrl: item.webUrl,
+                lastModifiedDateTime: item.lastModifiedDateTime,
+                size: item.size,
+                thumbnailUrl: item.thumbnails?.[0]?.medium?.url,
+                downloadUrl: item['@microsoft.graph.downloadUrl']
+            }));
+    } catch (e) { return []; }
 };
-
-const crawlFolderRecursive = async (token: string, folderId: string, results: CloudItem[], user: User) => {
-  try {
-    let nextLink = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children?expand=thumbnails&top=200`;
-    while (nextLink) {
-      const response = await fetch(nextLink, { headers: { 'Authorization': `Bearer ${token}` } });
-      if (!response.ok) break;
-      const data = await response.json();
-      if (data.value) {
-        for (const item of data.value) {
-            if (user.role !== 'admin') {
-                const name = item.name.toLowerCase();
-                // Admin folders: System, Bo_chi_huy, Quan_tri_vien
-                if (name === 'system' || name === 'bo_chi_huy' || name === 'quan_tri_vien') continue;
-                // Hide Pending Folder
-                if (name === 'tu_lieu_chung_cho_duyet') continue;
-            }
-            if (item.folder) { await crawlFolderRecursive(token, item.id, results, user); } 
-            else if (item.file) {
-                const name = item.name.toLowerCase();
-                if (name === 'users.json' || name === 'config.json') continue;
-                const mime = item.file.mimeType || '';
-                if (mime.startsWith('image/') || mime.startsWith('video/') || /\.(jpg|jpeg|png|mp4|mov)$/i.test(name)) {
-                    let thumb = "";
-                    if (item.thumbnails?.length > 0) thumb = item.thumbnails[0].medium?.url || "";
-                    results.push({
-                        id: item.id, name: item.name, file: item.file, webUrl: item.webUrl,
-                        lastModifiedDateTime: item.lastModifiedDateTime, size: item.size, thumbnailUrl: thumb,
-                        downloadUrl: item['@microsoft.graph.downloadUrl'],
-                        views: Math.floor(Math.random() * 100), downloads: Math.floor(Math.random() * 50)
-                    });
-                }
-            }
-        }
-      }
-      nextLink = data['@odata.nextLink'];
-    }
-  } catch (e) { }
-}
 
 export const aggregateUserStats = (allMedia: CloudItem[], users: User[]): User[] => {
     const statsMap = new Map<string, { count: number, size: number }>();
-    users.forEach(u => { statsMap.set(u.username.toLowerCase(), { count: 0, size: 0 }); });
+    users.forEach(u => statsMap.set(u.username.toLowerCase(), { count: 0, size: 0 }));
+
     allMedia.forEach(item => {
-        if (!item.file) return;
-        const fileName = item.name.toLowerCase();
-        for (const u of users) {
-             const prefix = u.username.toLowerCase() + '_';
-             if (fileName.startsWith(prefix)) {
-                 const current = statsMap.get(u.username.toLowerCase())!;
-                 current.count++;
-                 current.size += item.size;
-                 break;
-             }
+        const parts = item.name.split('_');
+        if (parts.length > 0) {
+            const username = parts[0].toLowerCase();
+            const current = statsMap.get(username);
+            if (current) {
+                current.count++;
+                current.size += item.size;
+            }
         }
     });
+
     return users.map(u => ({
         ...u,
-        usageStats: { fileCount: statsMap.get(u.username.toLowerCase())?.count || 0, totalSize: statsMap.get(u.username.toLowerCase())?.size || 0 }
+        usageStats: {
+            fileCount: statsMap.get(u.username.toLowerCase())?.count || 0,
+            totalSize: statsMap.get(u.username.toLowerCase())?.size || 0
+        }
     }));
 };
 

@@ -72,3 +72,12 @@ export interface SystemStats {
   totalFiles: number;
   totalStorage: number; // Bytes
 }
+
+export interface QRCodeLog {
+  id: string;
+  fileId: string;
+  fileName: string;
+  createdBy: string;
+  createdDate: string; // ISO String
+  link: string;
+}
