@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { User, AppConfig, VisitorRecord } from '../types';
 import { fetchVisitors, updateVisitorStatus } from '../services/graphService';
@@ -73,8 +74,7 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
       if (!selectedVisitor) return;
       setIsUpdating(true);
       try {
-          // Changed to pass the full visitor object so service can determine the file path (month)
-          const success = await updateVisitorStatus(config, user.username, selectedVisitor, 'approved');
+          const success = await updateVisitorStatus(config, user.username, selectedVisitor.id, 'approved');
           if (success) {
               // Update local state
               setVisitors(prev => prev.map(v => v.id === selectedVisitor.id ? { ...v, status: 'approved' } : v));
