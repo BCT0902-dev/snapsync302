@@ -12,6 +12,7 @@ import {
 import { Button } from './components/Button';
 import { Album } from './components/Album';
 import { Statistics } from './components/Statistics';
+import { QRCodeSVG } from 'qrcode.react';
 import { 
   Camera, LogOut, Info, Settings, History, CheckCircle, XCircle, 
   Loader2, Image as ImageIcon, Users, Trash2, Plus, Edit,
@@ -19,7 +20,7 @@ import {
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
   BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock, Globe,
-  FolderLock, ChevronDown
+  FolderLock, ChevronDown, QrCode
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -114,6 +115,10 @@ export default function App() {
   const [systemFolders, setSystemFolders] = useState<ExtendedCloudItem[]>([]);
   const [isLoadingFolders, setIsLoadingFolders] = useState(false);
   const [tempAllowedPaths, setTempAllowedPaths] = useState<Set<string>>(new Set());
+
+  // QR Code Modal State
+  const [qrModalData, setQrModalData] = useState<{name: string, link: string} | null>(null);
+  const [isGeneratingQR, setIsGeneratingQR] = useState(false);
 
   // System Config State (For Admin Edit)
   const [tempSysConfig, setTempSysConfig] = useState<SystemConfig>(systemConfig); // Init from state
@@ -815,6 +820,21 @@ export default function App() {
       }
   };
 
+  // --- QR CODE GENERATION ---
+  const handleShowQR = async (item: CloudItem) => {
+      if (!user) return;
+      setIsGeneratingQR(true);
+      try {
+          // Tạo link share ẩn danh (Public)
+          const link = await createShareLink(config, item.id);
+          setQrModalData({ name: item.name, link: link });
+      } catch (e: any) {
+          alert("Không thể tạo mã QR: " + e.message);
+      } finally {
+          setIsGeneratingQR(false);
+      }
+  };
+
   const handleRenameFolder = async (item: CloudItem) => {
     if (!user || user.role !== 'admin') return;
     
@@ -1266,6 +1286,7 @@ export default function App() {
           
         {currentView === 'camera' && !isGuest && (
           <div className="space-y-6">
+            {/* ... (Camera view content remains unchanged) ... */}
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
               <h3 className="text-lg font-bold mb-2" style={textThemeStyle}>Upload Tài liệu/Đa phương tiện</h3>
               <p className="text-slate-500 text-sm mb-4">
@@ -1521,6 +1542,15 @@ export default function App() {
                                            </div>
                                        </div>
                                        <div className="flex items-center gap-1">
+                                           {/* QR Button for Folder */}
+                                           <button 
+                                                onClick={(e) => { e.stopPropagation(); handleShowQR(item); }}
+                                                className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-full"
+                                                title="Tạo mã QR"
+                                           >
+                                                {isGeneratingQR ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />}
+                                           </button>
+
                                            {/* Share Button for Folder */}
                                            <button 
                                                 onClick={(e) => { e.stopPropagation(); handleCreateGalleryLink(item); }}
@@ -1567,7 +1597,8 @@ export default function App() {
                                   isSelectionMode={true}
                                   selectedIds={selectedGalleryIds}
                                   onToggleSelect={handleToggleGallerySelect}
-                                  onShare={handleCreateGalleryLink} // NEW SHARE HANDLER
+                                  onShare={handleCreateGalleryLink} // SHARE HANDLER
+                                  onQR={handleShowQR} // NEW QR HANDLER
                                />
                            </div>
                        )}
@@ -1619,6 +1650,41 @@ export default function App() {
         )}
         {/* --- GALLERY VIEW END --- */}
 
+        {/* --- QR CODE MODAL --- */}
+        {qrModalData && (
+            <div className="fixed inset-0 z-[80] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-200">
+                <div className="bg-white rounded-2xl p-6 shadow-2xl max-w-sm w-full flex flex-col items-center relative animate-in zoom-in-95 duration-200">
+                    <button 
+                        onClick={() => setQrModalData(null)}
+                        className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 bg-slate-100 rounded-full"
+                    >
+                        <XCircle className="w-6 h-6" />
+                    </button>
+                    
+                    <h3 className="font-bold text-lg text-slate-800 mb-1 text-center">Mã QR Truy cập nhanh</h3>
+                    <p className="text-xs text-slate-500 mb-6 text-center px-4">
+                        Khách có thể quét mã này để xem "{qrModalData.name}" mà không cần đăng nhập.
+                    </p>
+                    
+                    <div className="bg-white p-4 rounded-xl shadow-inner border border-slate-200">
+                        <QRCodeSVG value={qrModalData.link} size={200} />
+                    </div>
+                    
+                    <p className="text-xs font-mono text-slate-400 mt-4 break-all text-center line-clamp-2">
+                        {qrModalData.link}
+                    </p>
+
+                    <button 
+                        onClick={() => setQrModalData(null)}
+                        className="mt-6 w-full py-3 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 transition-colors"
+                    >
+                        Đóng
+                    </button>
+                </div>
+            </div>
+        )}
+
+        {/* ... (Settings and User Manager views remain unchanged) ... */}
         {currentView === 'settings' && user.role === 'admin' && !isGuest && (
           <div className="space-y-6">
             <h3 className="font-bold text-slate-800 text-xl flex items-center">
@@ -1852,7 +1918,7 @@ export default function App() {
            </div>
         )}
 
-        {/* --- PERMISSION MODAL (UPDATED TREE VIEW) --- */}
+        {/* --- PERMISSION MODAL --- */}
         {showPermissionModal && permissionTargetUser && (
             <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
                 <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full max-h-[80vh] flex flex-col">
@@ -1896,7 +1962,6 @@ export default function App() {
                                         className="flex items-center p-2 rounded-lg hover:bg-slate-50 transition-colors border border-transparent hover:border-slate-100"
                                         style={{ paddingLeft: `${(folder.level * 16) + 8}px` }}
                                     >
-                                        {/* Expand Toggle Button */}
                                         <button 
                                             onClick={() => handleToggleFolderExpand(folder)}
                                             className="p-1 mr-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-200"
@@ -1910,7 +1975,6 @@ export default function App() {
                                             )}
                                         </button>
 
-                                        {/* Checkbox & Label Area */}
                                         <label className="flex items-center flex-1 cursor-pointer select-none">
                                             <div className="relative flex items-center">
                                                 <input 
@@ -1946,7 +2010,6 @@ export default function App() {
         )}
       </main>
 
-      {/* FOOTER NAV: Bỏ absolute để trở thành 1 phần tử flex-none ở cuối cột, đảm bảo luôn nằm dưới cùng màn hình */}
       <nav className="bg-white border-t border-slate-200 flex justify-around items-center py-2 pb-safe flex-none shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-30">
         {!isGuest && (
             <TabButton active={currentView === 'camera'} onClick={() => setCurrentView('camera')} icon={<Camera />} label="Upload" color={systemConfig.themeColor} />

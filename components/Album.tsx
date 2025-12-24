@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { CloudItem, User } from '../types';
-import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle, Trash2, CheckSquare, Square, Eye, Share2 } from 'lucide-react';
+import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle, Trash2, CheckSquare, Square, Eye, Share2, QrCode } from 'lucide-react';
 
 interface AlbumProps {
   items: CloudItem[];
@@ -13,14 +13,15 @@ interface AlbumProps {
   isSelectionMode?: boolean;
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string) => void;
-  // New Share Prop
+  // Share Props
   onShare?: (item: CloudItem) => void;
+  onQR?: (item: CloudItem) => void;
 }
 
 export const Album: React.FC<AlbumProps> = ({ 
     items, color, isAdmin = false, currentUser, onDelete,
     isSelectionMode = false, selectedIds, onToggleSelect,
-    onShare
+    onShare, onQR
 }) => {
   const [selectedItem, setSelectedItem] = useState<CloudItem | null>(null);
   const [isImgLoading, setIsImgLoading] = useState(false);
@@ -32,9 +33,6 @@ export const Album: React.FC<AlbumProps> = ({
   const mediaItems = items.filter(i => i.file);
 
   const handleOpenItem = (item: CloudItem) => {
-    // SỬA ĐỔI: Loại bỏ logic chặn xem ảnh.
-    // Click vào container (ảnh) sẽ luôn mở Lightbox xem ảnh.
-    // Việc chọn ảnh chỉ thực hiện khi click vào Checkbox.
     setSelectedItem(item);
     setIsImgLoading(true); 
     setIsDownloading(false);
@@ -86,7 +84,6 @@ export const Album: React.FC<AlbumProps> = ({
     e.stopPropagation();
     if (!selectedItem) return;
     
-    // Ưu tiên dùng downloadUrl (link tải trực tiếp), fallback về webUrl
     const targetUrl = selectedItem.downloadUrl || selectedItem.webUrl;
     
     if (!targetUrl) {
@@ -96,8 +93,6 @@ export const Album: React.FC<AlbumProps> = ({
 
     try {
         setIsDownloading(true);
-        
-        // Cách 1: Fetch Blob để ép trình duyệt tải về với đúng tên file
         const response = await fetch(targetUrl);
         if (!response.ok) throw new Error("Download failed");
         
@@ -106,7 +101,7 @@ export const Album: React.FC<AlbumProps> = ({
         
         const link = document.createElement('a');
         link.href = blobUrl;
-        link.download = selectedItem.name; // Ép tên file đúng
+        link.download = selectedItem.name;
         document.body.appendChild(link);
         link.click();
         
@@ -114,7 +109,6 @@ export const Album: React.FC<AlbumProps> = ({
         window.URL.revokeObjectURL(blobUrl);
     } catch (error) {
         console.error("Blob download failed, fallback to direct link", error);
-        // Cách 2 (Fallback): Mở trực tiếp link downloadUrl trong tab mới
         window.open(targetUrl, '_blank');
     } finally {
         setIsDownloading(false);
@@ -131,7 +125,11 @@ export const Album: React.FC<AlbumProps> = ({
       }
   };
 
-  // Xác định URL hiển thị: Ưu tiên downloadUrl (Full Quality), dự phòng thumbnailUrl
+  const handleQRClick = async () => {
+      if (!selectedItem || !onQR) return;
+      onQR(selectedItem);
+  };
+
   const getDisplayUrl = (item: CloudItem) => {
       if (item.file?.mimeType?.startsWith('video/')) {
           return item.downloadUrl || item.webUrl;
@@ -139,7 +137,6 @@ export const Album: React.FC<AlbumProps> = ({
       return item.downloadUrl || item.thumbnailUrl || "";
   };
 
-  // Check quyền xóa: Admin hoặc chủ sở hữu file (tên file bắt đầu bằng username)
   const canDelete = isAdmin || (currentUser && selectedItem && selectedItem.name.startsWith(currentUser.username + '_'));
 
   if (mediaItems.length === 0) {
@@ -148,7 +145,6 @@ export const Album: React.FC<AlbumProps> = ({
 
   return (
     <>
-      {/* Grid View */}
       <div className="grid grid-cols-3 gap-1">
         {mediaItems.map((item) => {
           const isSelected = selectedIds?.has(item.id);
@@ -156,7 +152,7 @@ export const Album: React.FC<AlbumProps> = ({
             <div 
               key={item.id} 
               className={`aspect-square relative overflow-hidden bg-slate-100 cursor-pointer ${isSelected ? 'ring-4 ring-emerald-500 z-10' : ''}`}
-              onClick={() => handleOpenItem(item)} // Click ảnh -> Xem ảnh
+              onClick={() => handleOpenItem(item)}
             >
               {item.thumbnailUrl ? (
                   <img 
@@ -172,19 +168,17 @@ export const Album: React.FC<AlbumProps> = ({
                   </div>
               )}
               
-              {/* Overlay Icon cho Video */}
               {item.file?.mimeType?.startsWith('video/') && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/20">
                       <PlayCircle className="w-8 h-8 text-white opacity-80" />
                   </div>
               )}
 
-              {/* Selection Checkbox Overlay */}
               {onToggleSelect && (
                   <div 
                     className={`absolute top-0 right-0 p-3 z-20`} 
                     onClick={(e) => { 
-                        e.stopPropagation(); // Ngăn sự kiện nổi lên (không mở ảnh)
+                        e.stopPropagation(); 
                         onToggleSelect(item.id); 
                     }}
                   >
@@ -194,7 +188,6 @@ export const Album: React.FC<AlbumProps> = ({
                   </div>
               )}
               
-              {/* Stats Overlay (Góc dưới trái) */}
               <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black/70 to-transparent p-1 pt-4 flex items-center justify-between text-[8px] text-white/90 pointer-events-none">
                   <div className="flex items-center gap-1 pl-1">
                       <Eye className="w-2.5 h-2.5" />
@@ -210,20 +203,23 @@ export const Album: React.FC<AlbumProps> = ({
         })}
       </div>
 
-      {/* Lightbox Modal */}
       {selectedItem && (
         <div className="fixed inset-0 z-[60] bg-black/95 flex flex-col animate-in fade-in duration-200">
-           {/* Header */}
            <div className="flex justify-between items-center p-4 text-white bg-black/50 backdrop-blur-sm absolute top-0 w-full z-10">
               <div className="truncate pr-4">
                   <p className="text-sm font-bold truncate">{selectedItem.name}</p>
                   <p className="text-xs text-white/60">{(selectedItem.size / 1024 / 1024).toFixed(2)} MB • {new Date(selectedItem.lastModifiedDateTime).toLocaleDateString()}</p>
               </div>
               <div className="flex gap-4 shrink-0 items-center">
-                  <div className="flex items-center gap-2 text-xs text-white/70 mr-2 hidden sm:flex">
-                      <span className="flex items-center"><Eye className="w-4 h-4 mr-1" /> {selectedItem.views || 0}</span>
-                      <span className="flex items-center ml-2"><Download className="w-4 h-4 mr-1" /> {selectedItem.downloads || 0}</span>
-                  </div>
+                  {onQR && (
+                      <button 
+                        onClick={handleQRClick}
+                        className="p-2 hover:bg-white/20 rounded-full flex items-center justify-center"
+                        title="Tạo mã QR"
+                      >
+                         <QrCode className="w-5 h-5" />
+                      </button>
+                  )}
 
                   {onShare && (
                       <button 
@@ -258,7 +254,6 @@ export const Album: React.FC<AlbumProps> = ({
               </div>
            </div>
 
-           {/* Content */}
            <div className="flex-1 flex items-center justify-center relative w-full h-full p-2" onClick={handleClose}>
                {selectedItem.file?.mimeType?.startsWith('image/') ? (
                    <>
@@ -267,7 +262,7 @@ export const Album: React.FC<AlbumProps> = ({
                             src={getDisplayUrl(selectedItem)} 
                             alt="Full view" 
                             className={`max-h-full max-w-full object-contain shadow-2xl transition-opacity duration-300 ${isImgLoading ? 'opacity-0' : 'opacity-100'}`}
-                            onClick={(e) => e.stopPropagation()} // Prevent close when clicking image
+                            onClick={(e) => e.stopPropagation()} 
                             onLoad={() => setIsImgLoading(false)}
                             onError={() => setIsImgLoading(false)}
                        />
@@ -291,7 +286,6 @@ export const Album: React.FC<AlbumProps> = ({
                    </div>
                )}
 
-               {/* Navigation Arrows */}
                <button onClick={handlePrev} className="absolute left-2 p-3 bg-black/30 text-white rounded-full hover:bg-white/20 backdrop-blur-md"><ChevronLeft className="w-6 h-6" /></button>
                <button onClick={handleNext} className="absolute right-2 p-3 bg-black/30 text-white rounded-full hover:bg-white/20 backdrop-blur-md"><ChevronRight className="w-6 h-6" /></button>
            </div>
