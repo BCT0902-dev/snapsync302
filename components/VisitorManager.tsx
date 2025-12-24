@@ -6,7 +6,7 @@ import { QRCodeCanvas } from 'qrcode.react';
 import { Button } from './Button';
 import { 
   Users, QrCode, Download, Loader2, Calendar, Phone, User as UserIcon, 
-  MapPin, XCircle, FileSpreadsheet, FileCode, CheckCircle, Check, RefreshCw
+  MapPin, XCircle, FileSpreadsheet, FileCode, CheckCircle, Check, RefreshCw, ChevronLeft, ChevronRight
 } from 'lucide-react';
 
 // @ts-ignore
@@ -24,14 +24,15 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
   const [showQRModal, setShowQRModal] = useState(false);
   const [selectedVisitor, setSelectedVisitor] = useState<VisitorRecord | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
-
-  // Generate current month string for data fetching (YYYY_MM)
-  const today = new Date();
-  const currentMonthStr = `${today.getFullYear()}_${(today.getMonth() + 1).toString().padStart(2, '0')}`;
   
-  // URL for QR Code (Simulated)
-  // In real app, this should be the deployed URL
-  const qrUrl = `${window.location.origin}/?view=guest-visit&unit=${user.username}&month=${currentMonthStr}`;
+  // State for selected month (default to current month)
+  const [viewDate, setViewDate] = useState(new Date());
+
+  // Generate view month string for data fetching (YYYY_MM)
+  const viewMonthStr = `${viewDate.getFullYear()}_${(viewDate.getMonth() + 1).toString().padStart(2, '0')}`;
+  
+  // URL for QR Code (Dynamic based on selected month)
+  const qrUrl = `${window.location.origin}/?view=guest-visit&unit=${user.username}&month=${viewMonthStr}`;
 
   useEffect(() => {
     loadVisitors();
@@ -42,19 +43,28 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
     }, 30000);
 
     return () => clearInterval(intervalId);
-  }, [user.username]);
+  }, [user.username, viewMonthStr]); // Reload when month changes
 
   const loadVisitors = async (silent = false) => {
     if (!silent) setIsLoading(true);
     try {
-        const data = await fetchVisitors(config, user.username, currentMonthStr);
+        const data = await fetchVisitors(config, user.username, viewMonthStr);
         // Sort by date desc
         setVisitors(data.sort((a, b) => new Date(b.visitDate).getTime() - new Date(a.visitDate).getTime()));
     } catch (e) {
         console.error(e);
+        setVisitors([]);
     } finally {
         if (!silent) setIsLoading(false);
     }
+  };
+
+  const handleMonthChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!e.target.value) return;
+      const [y, m] = e.target.value.split('-').map(Number);
+      // Create date object for 1st of selected month
+      const newDate = new Date(y, m - 1, 1);
+      setViewDate(newDate);
   };
 
   const handleApprove = async () => {
@@ -83,7 +93,7 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
       try {
           // Prepare Data
           const title = `THỐNG KÊ DANH SÁCH ĐĂNG KÝ THĂM THÂN NHÂN ${user.unit.toUpperCase()}`;
-          const dateInfo = `Ngày tháng: Tháng ${today.getMonth() + 1}/${today.getFullYear()}`;
+          const dateInfo = `Tháng báo cáo: ${viewDate.getMonth() + 1}/${viewDate.getFullYear()}`;
           
           const headers = ["STT", "Ngày đăng ký", "Tên quân nhân", "Đơn vị", "Người thăm", "Quan hệ", "SĐT", "Trạng thái"];
           
@@ -132,7 +142,7 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
           XLSX.utils.book_append_sheet(wb, ws, "DanhSach");
 
           // Write file
-          const fileName = `DS_ThamThan_${user.username}_${currentMonthStr}.xlsx`;
+          const fileName = `DS_ThamThan_${user.username}_${viewMonthStr}.xlsx`;
           XLSX.writeFile(wb, fileName);
 
       } catch (e) {
@@ -159,7 +169,7 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
             <h2>THỐNG KÊ DANH SÁCH ĐĂNG KÝ THĂM THÂN NHÂN</h2>
             <div class="meta">
                 Đơn vị: ${user.unit} (User: ${user.username})<br/>
-                Tháng: ${currentMonthStr.replace('_', '/')}<br/>
+                Tháng báo cáo: ${viewDate.getMonth() + 1}/${viewDate.getFullYear()}<br/>
                 Ngày xuất: ${new Date().toLocaleString('vi-VN')}
             </div>
             <table>
@@ -195,7 +205,7 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.setAttribute("download", `BaoCao_ThamThan_${user.username}.html`);
+      link.setAttribute("download", `BaoCao_ThamThan_${user.username}_${viewMonthStr}.html`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -217,9 +227,9 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                 >
                     <QRCodeCanvas value={qrUrl} size={120} />
                 </div>
-                <p className="mt-3 text-sm font-bold text-slate-700">Mã QR Đăng ký (Tháng {today.getMonth() + 1})</p>
+                <p className="mt-3 text-sm font-bold text-slate-700">Mã QR Đăng ký (Tháng {viewDate.getMonth() + 1}/{viewDate.getFullYear()})</p>
                 <p className="text-xs text-slate-500 text-center mt-1 max-w-xs">
-                    Chạm vào mã để phóng to. Khách quét mã này để điền form đăng ký.
+                    Chạm vào mã để phóng to. Mã QR này áp dụng cho tháng {viewDate.getMonth() + 1}.
                 </p>
                 
                 {/* Simulation Button for Demo */}
@@ -234,13 +244,16 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
             </div>
         </div>
 
-        {/* Visitors List */}
+        {/* Visitors List with Filter Bar */}
         <div>
-            <div className="flex justify-between items-center mb-4">
-                <div className="flex items-center gap-2">
-                    <h4 className="font-bold text-slate-700 flex items-center">
+            {/* Filter & Actions Bar - Responsive */}
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-4 gap-3 bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
+                 {/* Left: Title + Refresh */}
+                 <div className="flex items-center justify-between sm:justify-start gap-3">
+                     <h4 className="font-bold text-slate-700 flex items-center">
                         <Calendar className="w-4 h-4 mr-2 text-slate-500" />
-                        Danh sách ({visitors.length})
+                        <span className="hidden xs:inline">Danh sách</span> 
+                        <span>({visitors.length})</span>
                     </h4>
                     <button 
                         onClick={() => loadVisitors()} 
@@ -249,23 +262,33 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                     >
                         <RefreshCw className="w-4 h-4" />
                     </button>
-                </div>
-
-                <div className="flex gap-2">
+                 </div>
+                 
+                 {/* Right: Date Picker + Exports */}
+                 <div className="flex items-center gap-2 justify-end flex-1 w-full sm:w-auto">
+                    <span className="text-xs font-bold text-slate-500 mr-1 hidden sm:inline">Tháng:</span>
+                    <input 
+                        type="month" 
+                        className="flex-1 sm:flex-none border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-700 outline-none focus:border-emerald-500 bg-slate-50"
+                        value={`${viewDate.getFullYear()}-${(viewDate.getMonth() + 1).toString().padStart(2, '0')}`}
+                        onChange={handleMonthChange}
+                    />
+                    <div className="h-6 w-px bg-slate-200 mx-1"></div>
                     <button onClick={exportToHtml} className="p-2 text-orange-600 bg-orange-50 rounded-lg hover:bg-orange-100" title="Xuất HTML">
                         <FileCode className="w-4 h-4" />
                     </button>
                     <button onClick={exportToExcel} className="p-2 text-green-600 bg-green-50 rounded-lg hover:bg-green-100" title="Xuất Excel (.xlsx)">
                         <FileSpreadsheet className="w-4 h-4" />
                     </button>
-                </div>
+                 </div>
             </div>
 
             {isLoading ? (
                 <div className="text-center py-10 text-slate-400"><Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />Đang tải dữ liệu...</div>
             ) : visitors.length === 0 ? (
                 <div className="text-center py-12 text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                    Chưa có lượt đăng ký nào trong tháng này.
+                    <p>Không có dữ liệu trong tháng {viewDate.getMonth() + 1}/{viewDate.getFullYear()}.</p>
+                    <p className="text-xs mt-1">Chọn tháng khác bằng bộ lọc ở trên.</p>
                 </div>
             ) : (
                 <div className="space-y-3">
@@ -305,6 +328,7 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                     <QRCodeCanvas value={qrUrl} size={280} />
                     <p className="mt-6 font-bold text-lg text-slate-800">Quét để đăng ký</p>
                     <p className="text-slate-500 text-sm">{user.unit}</p>
+                    <p className="text-emerald-600 font-bold mt-2">Tháng {viewDate.getMonth() + 1}/{viewDate.getFullYear()}</p>
                 </div>
             </div>
         )}
