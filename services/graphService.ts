@@ -226,6 +226,37 @@ export const saveVisitor = async (config: AppConfig, unit: string, visitor: Visi
     }
 };
 
+export const updateVisitorStatus = async (config: AppConfig, unit: string, visitorId: string, newStatus: 'approved' | 'completed'): Promise<boolean> => {
+    if (config.simulateMode) return true;
+    try {
+        const today = new Date();
+        const monthStr = `${today.getFullYear()}_${(today.getMonth() + 1).toString().padStart(2, '0')}`;
+        
+        // 1. Fetch current list
+        const currentList = await fetchVisitors(config, unit, monthStr);
+        
+        // 2. Update specific record
+        const newList = currentList.map(v => v.id === visitorId ? { ...v, status: newStatus } : v);
+        
+        // 3. Save back
+        const token = await getAccessToken();
+        const safeUnit = unit.replace(/[^a-zA-Z0-9]/g, '_');
+        const dbPath = `${config.targetFolder}/Visits/${safeUnit}_${monthStr}.json`;
+        const endpoint = `https://graph.microsoft.com/v1.0/me/drive/root:/${dbPath}:/content`;
+        
+        const response = await fetch(endpoint, {
+            method: 'PUT',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(newList, null, 2),
+        });
+        
+        return response.ok;
+    } catch (e) {
+        console.error("Update visitor failed", e);
+        return false;
+    }
+};
+
 export const uploadToOneDrive = async (
     file: File, 
     config: AppConfig, 

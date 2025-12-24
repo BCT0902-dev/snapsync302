@@ -1,12 +1,12 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { User, AppConfig, VisitorRecord } from '../types';
-import { fetchVisitors } from '../services/graphService';
+import { fetchVisitors, updateVisitorStatus } from '../services/graphService';
 import { QRCodeCanvas } from 'qrcode.react';
 import { Button } from './Button';
 import { 
   Users, QrCode, Download, Loader2, Calendar, Phone, User as UserIcon, 
-  MapPin, XCircle, FileSpreadsheet, FileCode
+  MapPin, XCircle, FileSpreadsheet, FileCode, CheckCircle, Check
 } from 'lucide-react';
 
 interface VisitorManagerProps {
@@ -20,6 +20,7 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
   const [isLoading, setIsLoading] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
   const [selectedVisitor, setSelectedVisitor] = useState<VisitorRecord | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
 
   // Generate current month string for data fetching (YYYY_MM)
   const today = new Date();
@@ -46,10 +47,42 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
     }
   };
 
+  const handleApprove = async () => {
+      if (!selectedVisitor) return;
+      setIsUpdating(true);
+      try {
+          const success = await updateVisitorStatus(config, user.username, selectedVisitor.id, 'approved');
+          if (success) {
+              // Update local state
+              setVisitors(prev => prev.map(v => v.id === selectedVisitor.id ? { ...v, status: 'approved' } : v));
+              // Update selected visitor view
+              setSelectedVisitor(prev => prev ? { ...prev, status: 'approved' } : null);
+              alert("Đã duyệt thành công!");
+          } else {
+              alert("Lỗi khi duyệt, vui lòng thử lại.");
+          }
+      } catch (e) {
+          console.error(e);
+          alert("Lỗi hệ thống.");
+      } finally {
+          setIsUpdating(false);
+      }
+  };
+
   const exportToExcel = () => {
-      // Simple CSV export with BOM for Excel compatibility
-      const headers = ["Ngày đăng ký", "Tên quân nhân", "Đơn vị", "Người thăm", "Quan hệ", "SĐT", "Trạng thái"];
-      const rows = visitors.map(v => [
+      // Create BOM for UTF-8 support in Excel
+      const BOM = "\uFEFF";
+      
+      const title = `Thống kê danh sách đăng ký thăm quân nhân ${user.unit}`;
+      const dateRow = `Ngày tháng: Tháng ${today.getMonth() + 1}/${today.getFullYear()},`;
+      
+      const headers = ["STT", "Ngày đăng ký", "Tên quân nhân", "Đơn vị", "Người thăm", "Quan hệ", "SĐT", "Trạng thái"];
+      
+      // Escape function for CSV fields
+      const escape = (val: string) => `"${String(val).replace(/"/g, '""')}"`;
+
+      const rows = visitors.map((v, idx) => [
+          idx + 1,
           new Date(v.visitDate).toLocaleString('vi-VN'),
           v.soldierName,
           v.soldierUnit,
@@ -57,9 +90,16 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
           v.relationship,
           `'${v.phone}`, // Force string for phone
           v.status === 'pending' ? 'Chờ duyệt' : 'Đã duyệt'
-      ]);
+      ].map(escape).join(","));
       
-      const csvContent = "\uFEFF" + [headers, ...rows].map(e => e.join(",")).join("\n");
+      // Construct CSV content with correct newlines
+      const csvContent = BOM + 
+          escape(title) + "\r\n" + 
+          escape(dateRow) + "\r\n" + 
+          "\r\n" + // Empty row
+          headers.map(escape).join(",") + "\r\n" + 
+          rows.join("\r\n");
+
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -100,6 +140,7 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                         <th>Người thăm</th>
                         <th>Quan hệ</th>
                         <th>SĐT</th>
+                        <th>Trạng thái</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -111,6 +152,7 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                             <td>${v.visitorName}</td>
                             <td>${v.relationship}</td>
                             <td>${v.phone}</td>
+                            <td>${v.status === 'pending' ? 'Chờ duyệt' : 'Đã duyệt'}</td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -200,8 +242,14 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                                     <span className="text-[10px] text-slate-400">{new Date(v.visitDate).toLocaleDateString('vi-VN')}</span>
                                 </div>
                             </div>
-                            <div className="flex items-center">
-                                <span className={`w-2 h-2 rounded-full ${v.status === 'pending' ? 'bg-amber-500' : 'bg-green-500'}`}></span>
+                            <div className="flex items-center pl-2">
+                                {v.status === 'approved' ? (
+                                    <div className="w-6 h-6 rounded-full bg-green-100 flex items-center justify-center">
+                                        <Check className="w-4 h-4 text-green-600" />
+                                    </div>
+                                ) : (
+                                    <span className="w-3 h-3 rounded-full bg-amber-500"></span>
+                                )}
                             </div>
                         </div>
                     ))}
@@ -255,17 +303,28 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                             </div>
                         </div>
                         
-                        <div className="border-t border-slate-100 pt-4 text-center text-xs text-slate-400">
-                            Đăng ký lúc: {new Date(selectedVisitor.visitDate).toLocaleString('vi-VN')}
+                        <div className="border-t border-slate-100 pt-4 flex flex-col items-center">
+                            <span className="text-xs text-slate-400 mb-4">
+                                Đăng ký lúc: {new Date(selectedVisitor.visitDate).toLocaleString('vi-VN')}
+                            </span>
+                            
+                            {selectedVisitor.status === 'pending' ? (
+                                <Button 
+                                    className="w-full rounded-xl py-3 shadow-lg shadow-emerald-200" 
+                                    style={{ backgroundColor: themeColor }}
+                                    onClick={handleApprove}
+                                    isLoading={isUpdating}
+                                >
+                                    <CheckCircle className="w-5 h-5 mr-2" />
+                                    Duyệt đăng ký
+                                </Button>
+                            ) : (
+                                <div className="flex items-center text-green-600 font-bold bg-green-50 px-4 py-2 rounded-lg">
+                                    <CheckCircle className="w-5 h-5 mr-2" />
+                                    Đã duyệt
+                                </div>
+                            )}
                         </div>
-
-                        <Button 
-                            className="w-full rounded-xl py-3" 
-                            style={{ backgroundColor: themeColor, color: 'white' }}
-                            onClick={() => setSelectedVisitor(null)}
-                        >
-                            Đóng
-                        </Button>
                     </div>
                 </div>
             </div>
