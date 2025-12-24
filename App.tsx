@@ -1,21 +1,19 @@
-
-import React, { useState, useRef, useEffect } from 'react';
-import { User, PhotoRecord, UploadStatus, AppConfig, SystemConfig, CloudItem, SystemStats, QRCodeLog } from './types';
-import { INITIAL_USERS, login } from './services/mockAuth';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
-  uploadToOneDrive, fetchUsersFromOneDrive, saveUsersToOneDrive, 
-  listUserMonthFolders, listFilesInMonthFolder, createShareLink,
   fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles, fetchUserDeletedItems,
   getAccessToken, listPathContents, fetchSystemStats, fetchAllMedia, deleteFileFromOneDrive,
   renameOneDriveItem, aggregateUserStats, moveOneDriveItem, fetchFolderChildren,
-  fetchQRCodeLogs, saveQRCodeLog
+  fetchQRCodeLogs, saveQRCodeLog, deleteQRCodeLog, fetchUsersFromOneDrive, saveUsersToOneDrive,
+  createShareLink, uploadToOneDrive
 } from './services/graphService';
+import { INITIAL_USERS, login } from './services/mockAuth';
 import { Button } from './components/Button';
 import { Album } from './components/Album';
 import { Statistics } from './components/Statistics';
 import { VisitorManager } from './components/VisitorManager'; // New Component
 import { VisitorForm } from './components/VisitorForm'; // New Component
 import { QRCodeCanvas } from 'qrcode.react';
+import { AppConfig, User, SystemConfig, CloudItem, PhotoRecord, UploadStatus, SystemStats, QRCodeLog } from './types';
 import { 
   Camera, LogOut, Info, Settings, History, CheckCircle, XCircle, 
   Loader2, Image as ImageIcon, Users, Trash2, Plus, Edit,
@@ -331,6 +329,18 @@ export default function App() {
       setIsLoading(false);
     }
   };
+  
+  const handleDeleteQRLog = async (id: string) => {
+      if (!confirm("Bạn có chắc chắn muốn xóa log này không?")) return;
+      // Optimistic update
+      setQrLogs(prev => prev.filter(l => l.id !== id));
+      
+      const success = await deleteQRCodeLog(config, id);
+      if (!success) {
+          alert("Lỗi khi xóa log trên server. Vui lòng tải lại trang.");
+          // Revert if needed, but for now we just rely on next load
+      }
+  };
 
   // ... (Rest of existing handlers like handleRegister, handleLogout, etc. - No changes needed to logic, just context) ...
   const handleRegister = async (e: React.FormEvent) => {
@@ -609,6 +619,7 @@ export default function App() {
     for (const record of newRecords) {
       if (!record.file) continue;
       try {
+        if (!user) throw new Error("User not found");
         // Pass uploadDestination to the service
         const result = await uploadToOneDrive(record.file, config, user, (progress) => {
             // Update progress state
@@ -1851,15 +1862,24 @@ export default function App() {
                                             {new Date(log.createdDate).toLocaleString('vi-VN')}
                                         </p>
                                     </div>
-                                    <a 
-                                        href={log.link} 
-                                        target="_blank" 
-                                        rel="noreferrer"
-                                        className="p-1.5 bg-white border border-slate-200 rounded text-blue-600 hover:bg-blue-50"
-                                        title="Mở link"
-                                    >
-                                        <ExternalLink className="w-3 h-3" />
-                                    </a>
+                                    <div className="flex gap-2">
+                                        <a 
+                                            href={log.link} 
+                                            target="_blank" 
+                                            rel="noreferrer"
+                                            className="p-1.5 bg-white border border-slate-200 rounded text-blue-600 hover:bg-blue-50"
+                                            title="Mở link"
+                                        >
+                                            <ExternalLink className="w-3 h-3" />
+                                        </a>
+                                        <button 
+                                            onClick={() => handleDeleteQRLog(log.id)}
+                                            className="p-1.5 bg-white border border-slate-200 rounded text-red-500 hover:bg-red-50 hover:border-red-200"
+                                            title="Xóa log"
+                                        >
+                                            <Trash2 className="w-3 h-3" />
+                                        </button>
+                                    </div>
                                 </div>
                             ))}
                         </div>
