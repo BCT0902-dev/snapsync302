@@ -1768,7 +1768,6 @@ export default function App() {
         {currentView === 'visitor-manager' && !isGuest && (
             <VisitorManager 
                 user={user}
-                usersList={usersList}
                 config={config}
                 themeColor={systemConfig.themeColor}
             />

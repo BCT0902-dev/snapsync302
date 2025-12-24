@@ -1,3 +1,4 @@
+
 import { AppConfig, User, SystemConfig, CloudItem, PhotoRecord, UploadStatus, SystemStats, QRCodeLog, VisitorRecord } from '../types';
 import { INITIAL_USERS } from './mockAuth';
 
@@ -106,7 +107,8 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
       `:/${config.targetFolder}/${cleanPath}:/children` : 
       `:/${config.targetFolder}:/children`;
     
-    const url = `https://graph.microsoft.com/v1.0/me/drive/root${target}?$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,video,image,@microsoft.graph.downloadUrl`;
+    // UPDATED: expand thumbnails
+    const url = `https://graph.microsoft.com/v1.0/me/drive/root${target}?$expand=thumbnails($select=medium,large)&$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,video,image,@microsoft.graph.downloadUrl`;
     
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
     if (!res.ok) return [];
@@ -123,7 +125,9 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
       lastModifiedDateTime: i.lastModifiedDateTime,
       size: i.size,
       downloadUrl: i['@microsoft.graph.downloadUrl'],
-      thumbnailUrl: i.file?.mimeType?.startsWith('image/') ? i['@microsoft.graph.downloadUrl'] : undefined // Simplified
+      thumbnailUrl: i.thumbnails?.[0]?.medium?.url || i['@microsoft.graph.downloadUrl'],
+      mediumUrl: i.thumbnails?.[0]?.medium?.url,
+      largeUrl: i.thumbnails?.[0]?.large?.url || i['@microsoft.graph.downloadUrl']
     }));
   } catch (e) {
     console.error(e);
@@ -136,7 +140,8 @@ export const fetchFolderChildren = async (config: AppConfig, folderId: string): 
     if (config.simulateMode) return [];
     try {
         const token = await getAccessToken();
-        const url = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children?$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl`;
+        // UPDATED: expand thumbnails
+        const url = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children?$expand=thumbnails($select=medium,large)&$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl`;
         const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
         if (!res.ok) return [];
         const data = await res.json();
@@ -148,7 +153,10 @@ export const fetchFolderChildren = async (config: AppConfig, folderId: string): 
             webUrl: i.webUrl,
             lastModifiedDateTime: i.lastModifiedDateTime,
             size: i.size,
-            downloadUrl: i['@microsoft.graph.downloadUrl']
+            downloadUrl: i['@microsoft.graph.downloadUrl'],
+            thumbnailUrl: i.thumbnails?.[0]?.medium?.url || i['@microsoft.graph.downloadUrl'],
+            mediumUrl: i.thumbnails?.[0]?.medium?.url,
+            largeUrl: i.thumbnails?.[0]?.large?.url || i['@microsoft.graph.downloadUrl']
         }));
     } catch(e) { return []; }
 };
@@ -254,10 +262,13 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
      if (config.simulateMode) return [];
      try {
          const token = await getAccessToken();
+         // UPDATED: expand thumbnails in search if supported, otherwise select fallback
          const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='')?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl`;
          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
          if (!res.ok) return [];
          const data = await res.json();
+         // Note: Search endpoint might not reliably support expanding thumbnails on the fly for all items.
+         // We rely on downloadUrl here, or we'd need to batch fetch thumbnails.
          return data.value.filter((i:any) => i.file).map((i:any) => ({
              id: i.id,
              name: i.name,
@@ -265,7 +276,9 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
              webUrl: i.webUrl,
              lastModifiedDateTime: i.lastModifiedDateTime,
              size: i.size,
-             downloadUrl: i['@microsoft.graph.downloadUrl']
+             downloadUrl: i['@microsoft.graph.downloadUrl'],
+             thumbnailUrl: i['@microsoft.graph.downloadUrl'], // Fallback for search
+             largeUrl: i['@microsoft.graph.downloadUrl']
          }));
      } catch (e) { return []; }
 };

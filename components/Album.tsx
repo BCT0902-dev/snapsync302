@@ -24,19 +24,31 @@ const GalleryItem = ({ item, isSelected, onToggleSelect, onClick }: {
     onToggleSelect?: (id: string) => void,
     onClick: (item: CloudItem) => void
 }) => {
-    const [src, setSrc] = useState<string | undefined>(item.thumbnailUrl);
+    // Ưu tiên Medium Thumb, sau đó đến Small (thumbnailUrl), cuối cùng mới là downloadUrl
+    const initialSrc = item.mediumUrl || item.thumbnailUrl || item.downloadUrl;
+    const [src, setSrc] = useState<string | undefined>(initialSrc);
     const [isRetrying, setIsRetrying] = useState(false);
     const [hasError, setHasError] = useState(false);
 
+    // Cập nhật lại src nếu item prop thay đổi
+    useEffect(() => {
+        setSrc(item.mediumUrl || item.thumbnailUrl || item.downloadUrl);
+        setHasError(false);
+        setIsRetrying(false);
+    }, [item]);
+
     const handleLoadError = async () => {
+        // Nếu đã thử tải lại bằng token hoặc không có link nào để tải thì dừng
         if (isRetrying || !item.downloadUrl) {
             setHasError(true);
             return;
         }
         
+        // Cơ chế Fallback: Nếu ảnh Thumb lỗi (401/403/404), thử tải file gốc bằng Token
         setIsRetrying(true);
         try {
             const token = await getAccessToken();
+            // Sử dụng downloadUrl để tải nội dung
             const res = await fetch(item.downloadUrl, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -125,8 +137,15 @@ export const Album: React.FC<AlbumProps> = ({
 
   const handleOpenItem = (item: CloudItem) => {
     setSelectedItem(item);
-    // Reset states
-    const initialUrl = item.file?.mimeType?.startsWith('video/') ? (item.downloadUrl || item.webUrl) : (item.downloadUrl || item.thumbnailUrl);
+    
+    // Ưu tiên Large Thumbnail cho ảnh xem trước để load nhanh, sau đó mới đến downloadUrl (gốc)
+    let initialUrl = "";
+    if (item.file?.mimeType?.startsWith('video/')) {
+         initialUrl = item.downloadUrl || item.webUrl;
+    } else {
+         initialUrl = item.largeUrl || item.downloadUrl || item.thumbnailUrl || "";
+    }
+
     setFullViewSrc(initialUrl);
     setIsImgLoading(true); 
     setIsSecureLoading(false);
@@ -160,11 +179,13 @@ export const Album: React.FC<AlbumProps> = ({
 
   // Xử lý lỗi tải ảnh Full -> Thử tải lại bằng Token
   const handleFullImageError = async () => {
+      // Nếu đã thử tải secure, hoặc không có link download gốc để thử, thì dừng
       if (isSecureLoading || !selectedItem?.downloadUrl) {
           setIsImgLoading(false);
           return;
       }
 
+      // Nếu link Large Thumbnail lỗi, thử tải file gốc bằng Token
       setIsSecureLoading(true);
       try {
           const token = await getAccessToken();
