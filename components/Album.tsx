@@ -17,38 +17,35 @@ interface AlbumProps {
   onQR?: (item: CloudItem) => void;
 }
 
-// --- SUB COMPONENT: GALLERY ITEM (Xử lý tải ảnh an toàn từng ô) ---
+// --- SUB COMPONENT: GALLERY ITEM (Lưới ảnh) ---
 const GalleryItem = ({ item, isSelected, onToggleSelect, onClick }: { 
     item: CloudItem, 
     isSelected: boolean, 
     onToggleSelect?: (id: string) => void,
     onClick: (item: CloudItem) => void
 }) => {
-    // Ưu tiên Medium Thumb, sau đó đến Small (thumbnailUrl), cuối cùng mới là downloadUrl
-    const initialSrc = item.mediumUrl || item.thumbnailUrl || item.downloadUrl;
+    // FIX: Ưu tiên Large URL để ảnh lưới nét hơn (Medium quá nhỏ cho màn hình HD)
+    const initialSrc = item.largeUrl || item.mediumUrl || item.thumbnailUrl || item.downloadUrl;
     const [src, setSrc] = useState<string | undefined>(initialSrc);
     const [isRetrying, setIsRetrying] = useState(false);
     const [hasError, setHasError] = useState(false);
 
-    // Cập nhật lại src nếu item prop thay đổi
     useEffect(() => {
-        setSrc(item.mediumUrl || item.thumbnailUrl || item.downloadUrl);
+        setSrc(item.largeUrl || item.mediumUrl || item.thumbnailUrl || item.downloadUrl);
         setHasError(false);
         setIsRetrying(false);
     }, [item]);
 
     const handleLoadError = async () => {
-        // Nếu đã thử tải lại bằng token hoặc không có link nào để tải thì dừng
         if (isRetrying || !item.downloadUrl) {
             setHasError(true);
             return;
         }
         
-        // Cơ chế Fallback: Nếu ảnh Thumb lỗi (401/403/404), thử tải file gốc bằng Token
+        // Fallback: Nếu thumbnail lỗi, thử tải file gốc (Secure Load)
         setIsRetrying(true);
         try {
             const token = await getAccessToken();
-            // Sử dụng downloadUrl để tải nội dung
             const res = await fetch(item.downloadUrl, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -127,7 +124,9 @@ export const Album: React.FC<AlbumProps> = ({
   // States cho Full View Modal
   const [fullViewSrc, setFullViewSrc] = useState<string | undefined>("");
   const [isImgLoading, setIsImgLoading] = useState(false);
-  const [isSecureLoading, setIsSecureLoading] = useState(false); // Đang tải lại bằng token
+  
+  // HD Loading State: Đang tải file gốc đè lên thumbnail
+  const [isHDLoading, setIsHDLoading] = useState(false); 
   
   const [isDownloading, setIsDownloading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -135,20 +134,67 @@ export const Album: React.FC<AlbumProps> = ({
 
   const mediaItems = items.filter(i => i.file);
 
+  // Effect: Tự động tải ảnh HD khi mở item
+  useEffect(() => {
+    if (!selectedItem) return;
+
+    let isActive = true; // Cleanup flag
+    let blobUrlToRevoke: string | null = null;
+
+    const loadHighQuality = async () => {
+        // 1. Nếu là video, dùng link trực tiếp (hoặc proxy nếu cần)
+        if (selectedItem.file?.mimeType?.startsWith('video/')) {
+             setFullViewSrc(selectedItem.downloadUrl || selectedItem.webUrl);
+             setIsHDLoading(false);
+             setIsImgLoading(false);
+             return;
+        }
+
+        // 2. Nếu là ảnh:
+        // B1: Hiển thị ngay Large Thumbnail (Preview nhanh, hơi mờ)
+        // Nếu đã có blob từ lần trước, setFullViewSrc đã được clear ở handleClose, 
+        // ở đây ta set placeholder.
+        const placeholder = selectedItem.largeUrl || selectedItem.mediumUrl || selectedItem.thumbnailUrl;
+        setFullViewSrc(placeholder);
+        
+        // B2: Tải Blob gốc (HD)
+        if (selectedItem.downloadUrl) {
+            setIsHDLoading(true); // Hiển thị spinner nhỏ báo đang nét dần
+            try {
+                const token = await getAccessToken();
+                const res = await fetch(selectedItem.downloadUrl, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (res.ok && isActive) {
+                    const blob = await res.blob();
+                    const hdUrl = URL.createObjectURL(blob);
+                    blobUrlToRevoke = hdUrl;
+                    setFullViewSrc(hdUrl); // Swap sang ảnh nét
+                }
+            } catch (e) {
+                console.error("Failed to load HD image", e);
+                // Nếu lỗi tải HD, giữ nguyên placeholder
+            } finally {
+                if (isActive) setIsHDLoading(false);
+                if (isActive) setIsImgLoading(false); // Tắt loading tổng
+            }
+        } else {
+             setIsImgLoading(false);
+        }
+    };
+
+    setIsImgLoading(true); // Spinner chính lúc mới mở
+    loadHighQuality();
+
+    return () => {
+        isActive = false;
+        if (blobUrlToRevoke) URL.revokeObjectURL(blobUrlToRevoke);
+    };
+  }, [selectedItem]);
+
   const handleOpenItem = (item: CloudItem) => {
     setSelectedItem(item);
-    
-    // Ưu tiên Large Thumbnail cho ảnh xem trước để load nhanh, sau đó mới đến downloadUrl (gốc)
-    let initialUrl = "";
-    if (item.file?.mimeType?.startsWith('video/')) {
-         initialUrl = item.downloadUrl || item.webUrl;
-    } else {
-         initialUrl = item.largeUrl || item.downloadUrl || item.thumbnailUrl || "";
-    }
-
-    setFullViewSrc(initialUrl);
-    setIsImgLoading(true); 
-    setIsSecureLoading(false);
+    // Reset states UI
     setIsDownloading(false);
     setIsDeleting(false);
     setIsSharing(false);
@@ -177,34 +223,6 @@ export const Album: React.FC<AlbumProps> = ({
     }
   };
 
-  // Xử lý lỗi tải ảnh Full -> Thử tải lại bằng Token
-  const handleFullImageError = async () => {
-      // Nếu đã thử tải secure, hoặc không có link download gốc để thử, thì dừng
-      if (isSecureLoading || !selectedItem?.downloadUrl) {
-          setIsImgLoading(false);
-          return;
-      }
-
-      // Nếu link Large Thumbnail lỗi, thử tải file gốc bằng Token
-      setIsSecureLoading(true);
-      try {
-          const token = await getAccessToken();
-          const res = await fetch(selectedItem.downloadUrl, {
-              headers: { 'Authorization': `Bearer ${token}` }
-          });
-          if (res.ok) {
-              const blob = await res.blob();
-              const blobUrl = URL.createObjectURL(blob);
-              setFullViewSrc(blobUrl);
-          }
-      } catch (e) {
-          console.error("Secure load failed", e);
-      } finally {
-          setIsSecureLoading(false);
-          setIsImgLoading(false);
-      }
-  };
-
   const handleDelete = async () => {
     if (!selectedItem || !onDelete) return;
     if (!confirm(`Bạn có chắc chắn muốn xóa "${selectedItem.name}" vĩnh viễn không?`)) return;
@@ -222,12 +240,12 @@ export const Album: React.FC<AlbumProps> = ({
     e.stopPropagation();
     if (!selectedItem) return;
     
+    // Tải file gốc
     const targetUrl = selectedItem.downloadUrl || selectedItem.webUrl;
     if (!targetUrl) { alert("Không tìm thấy đường dẫn tải file."); return; }
 
     try {
         setIsDownloading(true);
-        // Dùng token fetch blob để download an toàn
         const token = await getAccessToken();
         const response = await fetch(targetUrl, {
             headers: { 'Authorization': `Bearer ${token}` }
@@ -247,7 +265,6 @@ export const Album: React.FC<AlbumProps> = ({
         document.body.removeChild(link);
         window.URL.revokeObjectURL(blobUrl);
     } catch (error) {
-        // Fallback: Mở tab mới
         window.open(targetUrl, '_blank');
     } finally {
         setIsDownloading(false);
@@ -306,15 +323,23 @@ export const Album: React.FC<AlbumProps> = ({
            <div className="flex-1 flex items-center justify-center relative w-full h-full p-0 sm:p-4 bg-black" onClick={handleClose}>
                {selectedItem.file?.mimeType?.startsWith('image/') ? (
                    <>
-                       {(isImgLoading || isSecureLoading) && <Loader2 className="w-10 h-10 text-emerald-500 animate-spin absolute z-0" />}
+                       {/* Spinner chính khi chưa có ảnh nào */}
+                       {isImgLoading && !fullViewSrc && <Loader2 className="w-10 h-10 text-emerald-500 animate-spin absolute z-0" />}
+                       
                        <img 
                             src={fullViewSrc} 
                             alt="Full view" 
-                            className={`max-h-full max-w-full object-contain shadow-2xl transition-opacity duration-300 z-10 ${isImgLoading ? 'opacity-0' : 'opacity-100'}`}
+                            className={`max-h-full max-w-full object-contain shadow-2xl transition-opacity duration-300 z-10 ${!fullViewSrc ? 'opacity-0' : 'opacity-100'}`}
                             onClick={(e) => e.stopPropagation()} 
-                            onLoad={() => setIsImgLoading(false)}
-                            onError={handleFullImageError}
                        />
+
+                       {/* Indicator đang tải HD */}
+                       {isHDLoading && (
+                           <div className="absolute bottom-10 bg-black/50 text-white px-3 py-1 rounded-full text-xs flex items-center backdrop-blur-md z-20">
+                               <Loader2 className="w-3 h-3 animate-spin mr-2" />
+                               Đang tải chất lượng cao...
+                           </div>
+                       )}
                    </>
                ) : selectedItem.file?.mimeType?.startsWith('video/') ? (
                    <video controls autoPlay className="max-h-full max-w-full z-10" onClick={(e) => e.stopPropagation()}>
