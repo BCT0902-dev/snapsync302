@@ -78,8 +78,8 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
       
       const headers = ["STT", "Ngày đăng ký", "Tên quân nhân", "Đơn vị", "Người thăm", "Quan hệ", "SĐT", "Trạng thái"];
       
-      // Escape function for CSV fields
-      const escape = (val: string) => `"${String(val).replace(/"/g, '""')}"`;
+      // Escape function for CSV fields - Fixed to accept number
+      const escape = (val: string | number) => `"${String(val).replace(/"/g, '""')}"`;
 
       const rows = visitors.map((v, idx) => [
           idx + 1,
