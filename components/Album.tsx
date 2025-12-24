@@ -47,7 +47,11 @@ const GalleryItem = ({ item, isSelected, onToggleSelect, onClick }: {
         try {
             // Logic mới: Kiểm tra nếu là link Graph API thì cần token, ngược lại (OneDrive public link) thì KHÔNG được gửi token
             const needsToken = item.downloadUrl.includes('graph.microsoft.com');
-            const headers = needsToken ? { 'Authorization': `Bearer ${await getAccessToken()}` } : {};
+            // FIX TS ERROR: Khai báo rõ kiểu Record<string, string>
+            const headers: Record<string, string> = {};
+            if (needsToken) {
+                headers['Authorization'] = `Bearer ${await getAccessToken()}`;
+            }
 
             const res = await fetch(item.downloadUrl, { headers });
             if (res.ok) {
@@ -164,11 +168,13 @@ export const Album: React.FC<AlbumProps> = ({
             try {
                 // QUAN TRỌNG: Không gửi Token nếu là link downloadUrl (thường là 1drv.com hoặc pre-signed)
                 const needsToken = selectedItem.downloadUrl.includes('graph.microsoft.com');
-                let headers = {};
+                
+                // FIX TS ERROR: Khai báo rõ kiểu Record<string, string>
+                const headers: Record<string, string> = {};
                 
                 if (needsToken) {
                      const token = await getAccessToken();
-                     headers = { 'Authorization': `Bearer ${token}` };
+                     headers['Authorization'] = `Bearer ${token}`;
                 }
 
                 // Thử fetch lần 1 (theo logic trên)
@@ -268,10 +274,13 @@ export const Album: React.FC<AlbumProps> = ({
         
         // FIX: Logic download tương tự như View Full - Xử lý token thông minh
         const needsToken = targetUrl.includes('graph.microsoft.com');
-        let headers = {};
+        
+        // FIX TS ERROR: Khai báo rõ kiểu Record<string, string>
+        const headers: Record<string, string> = {};
+        
         if (needsToken) {
              const token = await getAccessToken();
-             headers = { 'Authorization': `Bearer ${token}` };
+             headers['Authorization'] = `Bearer ${token}`;
         }
 
         let response = await fetch(targetUrl, { headers });
