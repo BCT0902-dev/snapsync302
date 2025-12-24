@@ -1,58 +1,70 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { User, AppConfig, VisitorRecord } from '../types';
 import { fetchVisitors, updateVisitorStatus } from '../services/graphService';
 import { QRCodeCanvas } from 'qrcode.react';
-import { Button } from './Button';
 import { 
-  Users, QrCode, Download, Loader2, Calendar, Phone, User as UserIcon, 
+  Users, QrCode, Loader2, Calendar, Phone, User as UserIcon, 
   MapPin, XCircle, FileSpreadsheet, FileCode, CheckCircle, Check, RefreshCw, 
-  ChevronLeft, ChevronRight, Eye, Printer
+  Printer, Filter, ChevronDown, Building2, Eye
 } from 'lucide-react';
+import { Button } from './Button';
 
 // @ts-ignore
 import * as XLSX from 'xlsx';
 
 interface VisitorManagerProps {
   user: User;
+  usersList?: User[]; // Optional for non-admin context, but used here
   config: AppConfig;
   themeColor: string;
 }
 
-export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, themeColor }) => {
+export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, usersList = [], config, themeColor }) => {
   const [visitors, setVisitors] = useState<VisitorRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
-  const [showReportModal, setShowReportModal] = useState(false); // New State for Report Preview
+  const [showReportModal, setShowReportModal] = useState(false);
   const [selectedVisitor, setSelectedVisitor] = useState<VisitorRecord | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
   
-  // State for selected month (default to current month)
+  // --- FILTER STATES ---
+  // 1. Target Unit (Admin can change this)
+  const [targetUnitUsername, setTargetUnitUsername] = useState(user.username);
+  
+  // 2. Time Filter
   const [viewDate, setViewDate] = useState(new Date());
+  const [filterMode, setFilterMode] = useState<'month' | 'week'>('month');
+  const [selectedWeek, setSelectedWeek] = useState<number>(1); // 1, 2, 3, 4
+
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Generate view month string for data fetching (YYYY_MM)
+  // Derive month string for API fetching (Always fetch by month, filter locally)
   const viewMonthStr = `${viewDate.getFullYear()}_${(viewDate.getMonth() + 1).toString().padStart(2, '0')}`;
   
-  // URL for QR Code (Dynamic based on selected month)
-  const qrUrl = `${window.location.origin}/?view=guest-visit&unit=${user.username}&month=${viewMonthStr}`;
+  // Dynamic QR Url based on selection
+  const qrUrl = `${window.location.origin}/?view=guest-visit&unit=${targetUnitUsername}&month=${viewMonthStr}`;
+
+  // Reset target unit if user changes (logout/login)
+  useEffect(() => {
+      setTargetUnitUsername(user.username);
+  }, [user.username]);
 
   useEffect(() => {
     loadVisitors();
     
-    // Auto refresh every 30 seconds
     const intervalId = setInterval(() => {
-        loadVisitors(true); // silent reload
+        loadVisitors(true);
     }, 30000);
 
     return () => clearInterval(intervalId);
-  }, [user.username, viewMonthStr]); // Reload when month changes
+  }, [targetUnitUsername, viewMonthStr]); 
 
   const loadVisitors = async (silent = false) => {
     if (!silent) setIsLoading(true);
     try {
-        const data = await fetchVisitors(config, user.username, viewMonthStr);
-        // Sort by date desc
+        // Fetch data for the selected Target Unit
+        const data = await fetchVisitors(config, targetUnitUsername, viewMonthStr);
         setVisitors(data.sort((a, b) => new Date(b.visitDate).getTime() - new Date(a.visitDate).getTime()));
     } catch (e) {
         console.error(e);
@@ -62,23 +74,37 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
     }
   };
 
+  // --- LOGIC LỌC DỮ LIỆU ---
+  const getWeekNumber = (date: Date) => {
+      const day = date.getDate();
+      if (day <= 7) return 1;
+      if (day <= 14) return 2;
+      if (day <= 21) return 3;
+      return 4; // Từ ngày 22 đến hết tháng
+  };
+
+  const filteredVisitors = useMemo(() => {
+      if (filterMode === 'month') return visitors;
+      
+      return visitors.filter(v => {
+          const vDate = new Date(v.visitDate);
+          return getWeekNumber(vDate) === selectedWeek;
+      });
+  }, [visitors, filterMode, selectedWeek]);
+
   const handleMonthChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       if (!e.target.value) return;
       const [y, m] = e.target.value.split('-').map(Number);
-      // Create date object for 1st of selected month
-      const newDate = new Date(y, m - 1, 1);
-      setViewDate(newDate);
+      setViewDate(new Date(y, m - 1, 1));
   };
 
   const handleApprove = async () => {
       if (!selectedVisitor) return;
       setIsUpdating(true);
       try {
-          const success = await updateVisitorStatus(config, user.username, selectedVisitor.id, 'approved');
+          const success = await updateVisitorStatus(config, targetUnitUsername, selectedVisitor.id, 'approved');
           if (success) {
-              // Update local state
               setVisitors(prev => prev.map(v => v.id === selectedVisitor.id ? { ...v, status: 'approved' } : v));
-              // Update selected visitor view
               setSelectedVisitor(prev => prev ? { ...prev, status: 'approved' } : null);
               alert("Đã duyệt thành công!");
           } else {
@@ -92,15 +118,24 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
       }
   };
 
+  // --- EXPORT LOGIC ---
+  const getReportTitle = () => {
+      const unitName = usersList.find(u => u.username === targetUnitUsername)?.displayName || targetUnitUsername;
+      const timeInfo = filterMode === 'week' 
+          ? `TUẦN ${selectedWeek} - THÁNG ${viewDate.getMonth() + 1}/${viewDate.getFullYear()}`
+          : `THÁNG ${viewDate.getMonth() + 1}/${viewDate.getFullYear()}`;
+      return { unitName, timeInfo };
+  };
+
   const exportToExcel = () => {
       try {
-          // Prepare Data
-          const title = `THỐNG KÊ DANH SÁCH ĐĂNG KÝ THĂM THÂN NHÂN ${user.unit.toUpperCase()}`;
-          const dateInfo = `Tháng báo cáo: ${viewDate.getMonth() + 1}/${viewDate.getFullYear()}`;
+          const { unitName, timeInfo } = getReportTitle();
+          const title = `DANH SÁCH ĐĂNG KÝ THĂM - ${unitName.toUpperCase()}`;
+          const subTitle = timeInfo;
           
           const headers = ["STT", "Ngày đăng ký", "Tên quân nhân", "Đơn vị", "Người thăm", "Quan hệ", "SĐT", "Trạng thái"];
           
-          const dataRows = visitors.map((v, idx) => [
+          const dataRows = filteredVisitors.map((v, idx) => [
               idx + 1,
               new Date(v.visitDate).toLocaleString('vi-VN'),
               v.soldierName,
@@ -111,51 +146,28 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
               v.status === 'pending' ? 'Chờ duyệt' : 'Đã duyệt'
           ]);
 
-          // Combine into a worksheet data array (Array of Arrays)
           const wsData = [
-              [title],           // Row 1: Title
-              [dateInfo],        // Row 2: Date
-              [],                // Row 3: Empty
-              headers,           // Row 4: Headers
-              ...dataRows        // Row 5+: Data
+              [title], [subTitle], [], headers, ...dataRows
           ];
 
-          // Create Worksheet
           const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-          // Merge Title Cells (A1:H1) and Date Cells (A2:H2)
           if(!ws['!merges']) ws['!merges'] = [];
           ws['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } });
           ws['!merges'].push({ s: { r: 1, c: 0 }, e: { r: 1, c: 7 } });
 
-          // Set Column Widths (Optional but good for UX)
-          ws['!cols'] = [
-              { wch: 5 },  // STT
-              { wch: 20 }, // Time
-              { wch: 20 }, // Soldier
-              { wch: 20 }, // Unit
-              { wch: 20 }, // Visitor
-              { wch: 10 }, // Relation
-              { wch: 15 }, // Phone
-              { wch: 15 }  // Status
-          ];
+          ws['!cols'] = [{ wch: 5 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 10 }, { wch: 15 }, { wch: 15 }];
 
-          // Create Workbook and append sheet
           const wb = XLSX.utils.book_new();
           XLSX.utils.book_append_sheet(wb, ws, "DanhSach");
-
-          // Write file
-          const fileName = `DS_ThamThan_${user.username}_${viewMonthStr}.xlsx`;
-          XLSX.writeFile(wb, fileName);
+          XLSX.writeFile(wb, `DS_ThamThan_${targetUnitUsername}_${viewMonthStr}.xlsx`);
 
       } catch (e) {
-          console.error("Export Excel Error:", e);
-          alert("Lỗi khi xuất file Excel. Vui lòng thử lại.");
+          alert("Lỗi khi xuất file Excel.");
       }
   };
 
-  // Helper to generate HTML String (Used for both Download and Preview)
   const getReportHtml = () => {
+      const { unitName, timeInfo } = getReportTitle();
       return `
         <!DOCTYPE html>
         <html>
@@ -174,19 +186,12 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                 .status-approved { color: #059669; font-weight: bold; }
                 .footer { margin-top: 40px; display: flex; justify-content: space-between; text-align: center; padding: 0 50px; }
                 .footer div { font-weight: bold; }
-                @media print {
-                    @page { margin: 1cm; size: landscape; }
-                    body { padding: 0; }
-                    th { background-color: #ddd !important; -webkit-print-color-adjust: exact; }
-                }
             </style>
         </head>
         <body>
             <h2>THỐNG KÊ DANH SÁCH ĐĂNG KÝ THĂM THÂN NHÂN</h2>
-            <h3>Đơn vị: ${user.unit.toUpperCase()}</h3>
-            <div class="meta">
-                (Tháng ${viewDate.getMonth() + 1} năm ${viewDate.getFullYear()})
-            </div>
+            <h3>Đơn vị: ${unitName.toUpperCase()}</h3>
+            <div class="meta">(${timeInfo})</div>
             <table>
                 <thead>
                     <tr>
@@ -200,7 +205,7 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                     </tr>
                 </thead>
                 <tbody>
-                    ${visitors.length > 0 ? visitors.map((v, idx) => `
+                    ${filteredVisitors.length > 0 ? filteredVisitors.map((v, idx) => `
                         <tr>
                             <td style="text-align: center">${idx + 1}</td>
                             <td>${new Date(v.visitDate).toLocaleString('vi-VN')}</td>
@@ -234,7 +239,7 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.setAttribute("download", `BaoCao_ThamThan_${user.username}_${viewMonthStr}.html`);
+      link.setAttribute("download", `BaoCao_${targetUnitUsername}.html`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -248,11 +253,37 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
 
   return (
     <div className="space-y-6">
+        {/* ADMIN SELECTOR */}
+        {user.role === 'admin' && (
+            <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl flex items-center gap-3">
+                <div className="p-2 bg-white rounded-lg shadow-sm">
+                    <Building2 className="w-5 h-5 text-indigo-600" />
+                </div>
+                <div className="flex-1">
+                    <p className="text-xs font-bold text-indigo-800 uppercase mb-1">Đang xem dữ liệu của:</p>
+                    <div className="relative">
+                        <select 
+                            className="w-full p-2 pr-8 rounded-lg border border-indigo-200 text-sm font-medium bg-white text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500 appearance-none"
+                            value={targetUnitUsername}
+                            onChange={(e) => setTargetUnitUsername(e.target.value)}
+                        >
+                            {usersList.map(u => (
+                                <option key={u.id} value={u.username}>
+                                    {u.displayName} ({u.unit})
+                                </option>
+                            ))}
+                        </select>
+                        <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-2.5 pointer-events-none" />
+                    </div>
+                </div>
+            </div>
+        )}
+
         {/* Header Section with QR */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
             <h3 className="text-xl font-bold text-slate-800 flex items-center mb-4">
                 <Users className="w-6 h-6 mr-2" style={{ color: themeColor }} />
-                Quản lý đăng ký thăm quân nhân
+                Quản lý đăng ký thăm
             </h3>
             
             <div className="flex flex-col items-center justify-center p-6 bg-slate-50 rounded-xl border border-slate-100">
@@ -262,33 +293,24 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                 >
                     <QRCodeCanvas value={qrUrl} size={120} />
                 </div>
-                <p className="mt-3 text-sm font-bold text-slate-700">Mã QR Đăng ký (Tháng {viewDate.getMonth() + 1}/{viewDate.getFullYear()})</p>
-                <p className="text-xs text-slate-500 text-center mt-1 max-w-xs">
-                    Chạm vào mã để phóng to. Mã QR này áp dụng cho tháng {viewDate.getMonth() + 1}.
+                <p className="mt-3 text-sm font-bold text-slate-700 uppercase">
+                    {filterMode === 'week' ? `QR Đăng ký - Tuần ${selectedWeek}` : `QR Đăng ký - Tháng ${viewDate.getMonth() + 1}`}
                 </p>
-                
-                {/* Simulation Button for Demo */}
-                <a 
-                    href={qrUrl} 
-                    target="_blank" 
-                    rel="noreferrer"
-                    className="mt-4 text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full font-bold hover:bg-blue-100 border border-blue-200"
-                >
-                    Mô phỏng Khách quét QR
-                </a>
+                <div className="text-xs text-slate-500 text-center mt-1 max-w-xs space-y-1">
+                    <p>Năm {viewDate.getFullYear()} • Đơn vị: {targetUnitUsername}</p>
+                    <p className="italic text-emerald-600 font-medium">Chạm vào mã để phóng to & tải về</p>
+                </div>
             </div>
         </div>
 
-        {/* Visitors List with Filter Bar */}
+        {/* Visitors List with Advanced Filter */}
         <div>
-            {/* Filter & Actions Bar - Responsive */}
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-4 gap-3 bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-                 {/* Left: Title + Refresh */}
-                 <div className="flex items-center justify-between sm:justify-start gap-3">
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm mb-4 space-y-4">
+                 {/* Row 1: Title & Refresh */}
+                 <div className="flex items-center justify-between">
                      <h4 className="font-bold text-slate-700 flex items-center">
                         <Calendar className="w-4 h-4 mr-2 text-slate-500" />
-                        <span className="hidden xs:inline">Danh sách</span> 
-                        <span>({visitors.length})</span>
+                        Danh sách ({filteredVisitors.length})
                     </h4>
                     <button 
                         onClick={() => loadVisitors()} 
@@ -298,40 +320,78 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                         <RefreshCw className="w-4 h-4" />
                     </button>
                  </div>
+
+                 {/* Row 2: Filters */}
+                 <div className="flex flex-col gap-3">
+                    {/* Time Scale Toggle */}
+                    <div className="flex bg-slate-100 p-1 rounded-lg">
+                        <button 
+                            onClick={() => setFilterMode('month')}
+                            className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${filterMode === 'month' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+                        >
+                            Theo Tháng
+                        </button>
+                        <button 
+                            onClick={() => setFilterMode('week')}
+                            className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${filterMode === 'week' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+                        >
+                            Theo Tuần
+                        </button>
+                    </div>
+
+                    {/* Controls Row */}
+                    <div className="flex gap-2">
+                        <div className="flex-1 relative">
+                            <input 
+                                type="month" 
+                                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-700 outline-none focus:border-emerald-500 bg-white"
+                                value={`${viewDate.getFullYear()}-${(viewDate.getMonth() + 1).toString().padStart(2, '0')}`}
+                                onChange={handleMonthChange}
+                            />
+                        </div>
+                        
+                        {filterMode === 'week' && (
+                            <div className="relative w-24">
+                                <select
+                                    className="w-full h-full border border-slate-200 rounded-lg px-2 py-2 text-xs font-bold text-slate-700 outline-none focus:border-emerald-500 bg-white appearance-none"
+                                    value={selectedWeek}
+                                    onChange={(e) => setSelectedWeek(Number(e.target.value))}
+                                >
+                                    <option value={1}>Tuần 1</option>
+                                    <option value={2}>Tuần 2</option>
+                                    <option value={3}>Tuần 3</option>
+                                    <option value={4}>Tuần 4</option>
+                                </select>
+                                <ChevronDown className="w-3 h-3 text-slate-400 absolute right-2 top-2.5 pointer-events-none" />
+                            </div>
+                        )}
+                    </div>
+                 </div>
                  
-                 {/* Right: Date Picker + Exports */}
-                 <div className="flex items-center gap-2 justify-end flex-1 w-full sm:w-auto">
-                    <span className="text-xs font-bold text-slate-500 mr-1 hidden sm:inline">Tháng:</span>
-                    <input 
-                        type="month" 
-                        className="flex-1 sm:flex-none border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-700 outline-none focus:border-emerald-500 bg-slate-50"
-                        value={`${viewDate.getFullYear()}-${(viewDate.getMonth() + 1).toString().padStart(2, '0')}`}
-                        onChange={handleMonthChange}
-                    />
-                    <div className="h-6 w-px bg-slate-200 mx-1"></div>
-                    
-                    <button onClick={() => setShowReportModal(true)} className="p-2 text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100" title="Xem báo cáo">
-                        <Eye className="w-4 h-4" />
+                 {/* Row 3: Actions */}
+                 <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+                    <button onClick={() => setShowReportModal(true)} className="px-3 py-1.5 text-blue-600 bg-blue-50 rounded-lg text-xs font-bold hover:bg-blue-100 flex items-center">
+                        <Eye className="w-3 h-3 mr-1" /> Xem
                     </button>
-                    <button onClick={exportToHtml} className="p-2 text-orange-600 bg-orange-50 rounded-lg hover:bg-orange-100" title="Xuất HTML">
-                        <FileCode className="w-4 h-4" />
+                    <button onClick={exportToHtml} className="px-3 py-1.5 text-orange-600 bg-orange-50 rounded-lg text-xs font-bold hover:bg-orange-100 flex items-center">
+                        <FileCode className="w-3 h-3 mr-1" /> HTML
                     </button>
-                    <button onClick={exportToExcel} className="p-2 text-green-600 bg-green-50 rounded-lg hover:bg-green-100" title="Xuất Excel (.xlsx)">
-                        <FileSpreadsheet className="w-4 h-4" />
+                    <button onClick={exportToExcel} className="px-3 py-1.5 text-green-600 bg-green-50 rounded-lg text-xs font-bold hover:bg-green-100 flex items-center">
+                        <FileSpreadsheet className="w-3 h-3 mr-1" /> Excel
                     </button>
                  </div>
             </div>
 
             {isLoading ? (
                 <div className="text-center py-10 text-slate-400"><Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />Đang tải dữ liệu...</div>
-            ) : visitors.length === 0 ? (
+            ) : filteredVisitors.length === 0 ? (
                 <div className="text-center py-12 text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                    <p>Không có dữ liệu trong tháng {viewDate.getMonth() + 1}/{viewDate.getFullYear()}.</p>
-                    <p className="text-xs mt-1">Chọn tháng khác bằng bộ lọc ở trên.</p>
+                    <p>Không có dữ liệu phù hợp.</p>
+                    <p className="text-xs mt-1">Vui lòng kiểm tra lại bộ lọc tháng/tuần.</p>
                 </div>
             ) : (
                 <div className="space-y-3">
-                    {visitors.map((v) => (
+                    {filteredVisitors.map((v) => (
                         <div 
                             key={v.id} 
                             onClick={() => setSelectedVisitor(v)}
@@ -366,8 +426,14 @@ export const VisitorManager: React.FC<VisitorManagerProps> = ({ user, config, th
                 <div className="bg-white p-8 rounded-3xl flex flex-col items-center animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                     <QRCodeCanvas value={qrUrl} size={280} />
                     <p className="mt-6 font-bold text-lg text-slate-800">Quét để đăng ký</p>
-                    <p className="text-slate-500 text-sm">{user.unit}</p>
-                    <p className="text-emerald-600 font-bold mt-2">Tháng {viewDate.getMonth() + 1}/{viewDate.getFullYear()}</p>
+                    <p className="text-slate-500 text-sm">{targetUnitUsername}</p>
+                    <div className="text-center mt-2">
+                        {filterMode === 'week' ? (
+                            <p className="text-emerald-600 font-bold bg-emerald-50 px-3 py-1 rounded-full text-sm">Tuần {selectedWeek} - Tháng {viewDate.getMonth() + 1}</p>
+                        ) : (
+                            <p className="text-emerald-600 font-bold bg-emerald-50 px-3 py-1 rounded-full text-sm">Tháng {viewDate.getMonth() + 1}/{viewDate.getFullYear()}</p>
+                        )}
+                    </div>
                 </div>
             </div>
         )}
