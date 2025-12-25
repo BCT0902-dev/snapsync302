@@ -83,15 +83,21 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                 // 2. Get Content
                 const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/content`;
                 const contentRes = await fetch(contentUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-                if (!contentRes.ok) throw new Error("Không thể tải nội dung file.");
                 
-                const blob = await contentRes.json().catch(() => contentRes.blob()); // Handle specific error json or blob
-                if (contentRes.headers.get("content-type")?.includes("application/json")) {
-                   // If Graph returns JSON error despite 200/400 check
-                   throw new Error("Lỗi tải file từ hệ thống.");
+                if (!contentRes.ok) {
+                    throw new Error("Không thể tải nội dung file (Lỗi kết nối).");
+                }
+                
+                // Check Content-Type để tránh lỗi parse JSON với file binary
+                const contentType = contentRes.headers.get("content-type");
+                if (contentType && contentType.includes("application/json")) {
+                    const err = await contentRes.json();
+                    throw new Error(err.error?.message || "Lỗi tải file từ hệ thống.");
                 }
 
-                const url = URL.createObjectURL(blob as Blob);
+                const blob = await contentRes.blob();
+                const url = URL.createObjectURL(blob);
+                
                 setFileData({
                     name: meta.name,
                     url: url,
@@ -99,6 +105,7 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                     size: meta.size
                 });
             } catch (e: any) {
+                console.error(e);
                 setError(e.message || "Có lỗi xảy ra.");
             } finally {
                 setLoading(false);
@@ -137,13 +144,18 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                         {systemConfig.appName} • {fileData ? (fileData.size / 1024 / 1024).toFixed(2) : 0} MB
                     </p>
                 </div>
-                <a 
-                    href={fileData?.url} 
-                    download={fileData?.name}
-                    className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all shadow-lg"
-                >
-                    <Download className="w-6 h-6" />
-                </a>
+                <div className="flex gap-2">
+                    <a href="/" className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all shadow-lg">
+                        <Home className="w-6 h-6" />
+                    </a>
+                    <a 
+                        href={fileData?.url} 
+                        download={fileData?.name}
+                        className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all shadow-lg"
+                    >
+                        <Download className="w-6 h-6" />
+                    </a>
+                </div>
             </div>
 
             {/* Viewer */}
@@ -988,13 +1000,13 @@ export default function App() {
       loadGalleryPath(newPathString);
   };
 
+  // UPDATE: Use Proxy Link for "Copy Link" to be consistent with QR Code
   const handleCreateGalleryLink = async (item: CloudItem) => {
-      // Logic share link trong Gallery
       if (!user) return;
       setSharingItem(item.id);
       try {
-          // Sử dụng Item ID thay vì Path để tránh lỗi "Item not found"
-          const link = await createShareLink(config, item.id);
+          // Use Proxy Link instead of createShareLink (OneDrive Link) to avoid throttling
+          const link = `${window.location.origin}?view=share&id=${item.id}`;
           await navigator.clipboard.writeText(link);
           alert(`Đã copy link chia sẻ: ${item.name}`);
       } catch(e: any) {
