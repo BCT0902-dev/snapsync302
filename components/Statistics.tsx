@@ -1,12 +1,14 @@
+
 // BCT0902
 import React, { useState, useEffect } from 'react';
 import { SystemStats } from '../types';
-import { Users, HardDrive, FileImage, Activity } from 'lucide-react';
+import { Users, HardDrive, FileImage, Activity, ChevronRight } from 'lucide-react';
 
 interface StatisticsProps {
   stats: SystemStats;
   isLoading: boolean;
   color: string;
+  onViewFiles?: () => void;
 }
 
 // Component con để xử lý hiệu ứng nhảy số
@@ -44,7 +46,7 @@ const AnimatedNumber = ({ value, format = (v: number) => v.toString() }: { value
     return <span>{display}</span>;
 };
 
-export const Statistics: React.FC<StatisticsProps> = ({ stats, isLoading, color }) => {
+export const Statistics: React.FC<StatisticsProps> = ({ stats, isLoading, color, onViewFiles }) => {
   
   const formatBytes = (bytes: number, decimals = 2) => {
     if (!+bytes) return '0 Bytes';
@@ -94,7 +96,9 @@ export const Statistics: React.FC<StatisticsProps> = ({ stats, isLoading, color 
       render: (v: number) => <AnimatedNumber value={v} />,
       icon: <FileImage className="w-6 h-6 text-amber-600" />,
       bgColor: "bg-amber-50",
-      borderColor: "border-amber-100"
+      borderColor: "border-amber-100",
+      onClick: onViewFiles, // Add click handler
+      isClickable: true
     },
     {
       label: "Dung lượng dùng",
@@ -109,7 +113,16 @@ export const Statistics: React.FC<StatisticsProps> = ({ stats, isLoading, color 
   return (
     <div className="grid grid-cols-2 gap-3 mb-6">
        {cards.map((card, idx) => (
-         <div key={idx} className={`p-4 rounded-xl border ${card.borderColor} ${card.bgColor} flex flex-col items-center justify-center shadow-sm`}>
+         <div 
+            key={idx} 
+            onClick={card.onClick}
+            className={`p-4 rounded-xl border ${card.borderColor} ${card.bgColor} flex flex-col items-center justify-center shadow-sm relative transition-all ${card.isClickable ? 'cursor-pointer hover:shadow-md hover:brightness-95 active:scale-95' : ''}`}
+         >
+            {card.isClickable && (
+                <div className="absolute top-2 right-2 text-slate-400 opacity-50">
+                    <ChevronRight className="w-4 h-4" />
+                </div>
+            )}
             <div className="mb-2 p-2 bg-white rounded-full shadow-sm">
                 {card.icon}
             </div>

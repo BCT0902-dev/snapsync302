@@ -1,3 +1,4 @@
+
 // BCT0902
 import React, { useState, useEffect, useRef } from 'react';
 import { 
@@ -227,13 +228,14 @@ export default function App() {
   }, []);
 
   // Fetch gallery when switching to gallery view
+  // UPDATE: Chỉ reset về gốc nếu chưa ở chế độ "View All"
   useEffect(() => {
     if (currentView === 'gallery' && user) {
-        // Luôn load root khi vào gallery
-        setIsViewingAll(false);
-        loadGalleryPath("");
-        setGalleryBreadcrumbs([{name: 'Thư viện', path: ''}]);
-        setSelectedGalleryIds(new Set()); // Reset selection
+        if (!isViewingAll) {
+            loadGalleryPath("");
+            setGalleryBreadcrumbs([{name: 'Thư viện', path: ''}]);
+            setSelectedGalleryIds(new Set()); 
+        }
     }
   }, [currentView, user]);
 
@@ -401,6 +403,7 @@ export default function App() {
     setPhotos([]); // Clear local photos
     setShowDisclaimer(false);
     setGuestViewParams(null); // Clear guest params if any
+    setIsViewingAll(false); // Reset View All mode
     // Remove URL params
     window.history.replaceState(null, '', window.location.pathname);
   };
@@ -1848,7 +1851,16 @@ export default function App() {
                    <BarChart3 className="w-4 h-4 mr-2 text-slate-500" />
                    Thống kê hệ thống
                 </h4>
-                <Statistics stats={stats} isLoading={isStatsLoading} color={systemConfig.themeColor} />
+                <Statistics 
+                    stats={stats} 
+                    isLoading={isStatsLoading} 
+                    color={systemConfig.themeColor}
+                    onViewFiles={() => {
+                        setIsViewingAll(true);
+                        setCurrentView('gallery');
+                        handleViewAll();
+                    }} 
+                />
              </div>
 
              {/* QR MANAGEMENT SECTION (NEW) */}
@@ -2216,7 +2228,24 @@ export default function App() {
         {!isGuest && (
             <TabButton active={currentView === 'camera'} onClick={() => setCurrentView('camera')} icon={<Camera />} label="Upload" color={systemConfig.themeColor} />
         )}
-        <TabButton active={currentView === 'gallery'} onClick={() => setCurrentView('gallery')} icon={<Library />} label="Thư viện" color={systemConfig.themeColor} />
+        <TabButton 
+            active={currentView === 'gallery'} 
+            onClick={() => {
+                // Nếu đang ở Gallery rồi -> Reset về gốc
+                if (currentView === 'gallery') {
+                    setIsViewingAll(false);
+                    loadGalleryPath("");
+                    setGalleryBreadcrumbs([{name: 'Thư viện', path: ''}]);
+                } else {
+                    // Chuyển sang Gallery -> Mặc định là gốc
+                    setIsViewingAll(false);
+                    setCurrentView('gallery');
+                }
+            }} 
+            icon={<Library />} 
+            label="Thư viện" 
+            color={systemConfig.themeColor} 
+        />
         {!isGuest && (
             <TabButton active={currentView === 'visitor-manager'} onClick={() => setCurrentView('visitor-manager')} icon={<HeartHandshake />} label="Thân nhân" color={systemConfig.themeColor} />
         )}
