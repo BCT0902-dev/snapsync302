@@ -143,6 +143,9 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
         return 'other';
     }, [fileData]);
 
+    // Theme Config based on file type
+    const isDarkTheme = fileType === 'video';
+
     if (loading) return (
         <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-4">
             <Loader2 className="w-10 h-10 text-emerald-600 animate-spin mb-4" />
@@ -164,24 +167,41 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
     );
 
     return (
-        <div className="h-[100dvh] bg-black flex flex-col relative overflow-hidden">
-            {/* Header Overlay - Absolute on top */}
-            <div className="absolute top-0 left-0 w-full z-20 pointer-events-none">
-                <div className="bg-gradient-to-b from-black/90 via-black/50 to-transparent p-4 flex justify-between items-start">
-                    <div className="text-white pointer-events-auto max-w-[70%]">
-                        <h1 className="font-bold text-lg truncate drop-shadow-md">{fileData?.name}</h1>
-                        <p className="text-xs text-white/80 opacity-80">
+        <div className={`h-[100dvh] flex flex-col relative overflow-hidden ${isDarkTheme ? 'bg-black' : 'bg-slate-50'}`}>
+            {/* Header: Absolute for Video (Overlay), Relative for PDF/Image (Solid) */}
+            <div className={`
+                flex-none z-30 transition-all
+                ${isDarkTheme 
+                    ? 'absolute top-0 left-0 w-full bg-gradient-to-b from-black/90 via-black/50 to-transparent p-4' 
+                    : 'relative bg-white border-b border-slate-200 px-4 py-3 shadow-sm'
+                }
+            `}>
+                <div className="flex justify-between items-start">
+                    <div className={`${isDarkTheme ? 'text-white' : 'text-slate-800'} max-w-[70%]`}>
+                        <h1 className="font-bold text-lg truncate drop-shadow-sm leading-tight">{fileData?.name}</h1>
+                        <p className={`text-xs mt-0.5 ${isDarkTheme ? 'text-white/80' : 'text-slate-500'}`}>
                             {systemConfig.appName} • {fileData ? (fileData.size / 1024 / 1024).toFixed(2) : 0} MB
                         </p>
                     </div>
-                    <div className="flex gap-2 pointer-events-auto shrink-0">
-                        <a href="/" className="p-2.5 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all shadow-lg">
+                    <div className="flex gap-2 shrink-0">
+                        <a 
+                            href="/" 
+                            className={`p-2.5 rounded-full transition-all shadow-sm ${
+                                isDarkTheme 
+                                ? 'bg-white/20 text-white hover:bg-white/30 backdrop-blur-md' 
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
+                            }`}
+                        >
                             <Home className="w-5 h-5" />
                         </a>
                         <a 
                             href={fileData?.url} 
                             download={fileData?.name}
-                            className="p-2.5 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all shadow-lg"
+                            className={`p-2.5 rounded-full transition-all shadow-sm ${
+                                isDarkTheme 
+                                ? 'bg-white/20 text-white hover:bg-white/30 backdrop-blur-md' 
+                                : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-100'
+                            }`}
                         >
                             <Download className="w-5 h-5" />
                         </a>
@@ -189,19 +209,19 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                 </div>
             </div>
 
-            {/* Viewer Content - Absolute Fullscreen */}
-            <div className="absolute inset-0 z-0 bg-slate-900 flex items-center justify-center">
+            {/* Viewer Content - Fills remaining space */}
+            <div className={`flex-1 relative w-full h-full overflow-hidden flex items-center justify-center ${isDarkTheme ? 'bg-black' : 'bg-slate-100'}`}>
                 {fileType === 'pdf' ? (
                      <object
                         data={`${fileData?.url}#view=FitH`}
                         type="application/pdf"
-                        className="w-full h-full block"
+                        className="w-full h-full block bg-white"
                     >
                         {/* Fallback */}
-                        <div className="flex flex-col items-center justify-center h-full text-white p-6 text-center">
-                            <FileIcon className="w-16 h-16 text-slate-500 mb-4" />
-                            <p className="mb-2 font-bold">Không thể xem trực tiếp</p>
-                            <p className="text-sm text-slate-400 mb-6">Trình duyệt này không hỗ trợ xem PDF nhúng.</p>
+                        <div className="flex flex-col items-center justify-center h-full p-6 text-center text-slate-500">
+                            <FileIcon className="w-16 h-16 text-slate-300 mb-4" />
+                            <p className="mb-2 font-bold text-slate-700">Không thể xem trực tiếp</p>
+                            <p className="text-sm mb-6">Trình duyệt này không hỗ trợ xem PDF nhúng.</p>
                             <a 
                                 href={fileData?.url} 
                                 download={fileData?.name} 
@@ -213,11 +233,13 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                         </div>
                     </object>
                 ) : fileType === 'image' ? (
-                    <img 
-                        src={fileData?.url} 
-                        alt="Content" 
-                        className="w-full h-full object-contain" 
-                    />
+                    <div className="w-full h-full overflow-auto flex items-center justify-center p-2">
+                        <img 
+                            src={fileData?.url} 
+                            alt="Content" 
+                            className="max-w-full max-h-full object-contain shadow-lg" 
+                        />
+                    </div>
                 ) : fileType === 'video' ? (
                     <video 
                         src={fileData?.url} 
@@ -228,7 +250,7 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                         className="w-full h-full max-h-screen object-contain" 
                     />
                 ) : (
-                    <div className="bg-white p-8 rounded-2xl flex flex-col items-center text-center m-4 max-w-sm">
+                    <div className="bg-white p-8 rounded-2xl flex flex-col items-center text-center m-4 max-w-sm shadow-xl">
                         <FileIcon className="w-16 h-16 text-slate-400 mb-4" />
                         <p className="font-bold text-slate-700 mb-2">Định dạng không hỗ trợ xem trước</p>
                         <p className="text-xs text-slate-500 mb-6 break-all">{fileData?.name}</p>
@@ -243,8 +265,8 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                 )}
             </div>
             
-             <div className="absolute bottom-4 left-0 w-full text-center z-20 pointer-events-none">
-                 <p className="text-white/20 text-[9px] uppercase tracking-widest font-medium drop-shadow-sm">Powered by {systemConfig.appName}</p>
+             <div className={`absolute bottom-2 left-0 w-full text-center z-20 pointer-events-none ${isDarkTheme ? 'text-white/20' : 'text-slate-300'} `}>
+                 <p className="text-[9px] uppercase tracking-widest font-medium">Powered by {systemConfig.appName}</p>
              </div>
         </div>
     );
