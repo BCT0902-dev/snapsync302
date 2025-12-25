@@ -37,6 +37,14 @@ const getCurrentWeekFolder = () => {
     return `T${month}/Tuần_${week}`;
 };
 
+// --- HELPER: LẤY TÊN ĐƠN VỊ CẤP CUỐI (LEAF UNIT) ---
+// VD: "Trung đoàn 88/Đại đội 18" -> "Đại đội 18"
+const getLeafUnitName = (unit: string): string => {
+    if (!unit) return "Unknown";
+    const parts = unit.split('/');
+    return parts[parts.length - 1].trim();
+};
+
 // --- USER MANAGEMENT ---
 
 export const fetchUsersFromOneDrive = async (config: AppConfig): Promise<User[]> => {
@@ -142,14 +150,15 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
     const data = await res.json();
     let items = data.value as any[];
     
-    // --- PHÂN QUYỀN HIỂN THỊ (SỬA LẠI THEO YÊU CẦU) ---
+    // --- PHÂN QUYỀN HIỂN THỊ (SỬA LẠI THEO YÊU CẦU MỚI) ---
     // Logic: Nếu là user thường và đang ở thư mục gốc (path rỗng)
     if (user && user.role !== 'admin' && !cleanPath) {
         const allowedNames = new Set<string>();
         
-        // 1. Thư mục Đơn vị: Dùng chính xác tên unit của user
-        // Ví dụ: User "d18" có unit "Tiểu đoàn thông tin 18" -> Folder tên là "Tiểu đoàn thông tin 18"
-        allowedNames.add(user.unit.toLowerCase()); 
+        // 1. Thư mục Đơn vị: Dùng tên cấp cuối cùng (Leaf Unit)
+        // Ví dụ: User c18_f302 (Trung đoàn 88/Đại đội 18) -> Folder tên là "Đại đội 18"
+        const leafUnit = getLeafUnitName(user.unit).toLowerCase();
+        allowedNames.add(leafUnit); 
         
         // 2. Thư mục chung
         allowedNames.add('tu_lieu_chung');
@@ -159,7 +168,7 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
             user.allowedPaths.forEach(p => allowedNames.add(p.toLowerCase()));
         }
 
-        // Thực hiện lọc: So sánh chính xác tên folder
+        // Thực hiện lọc: So sánh tên folder
         items = items.filter(item => {
             const itemName = item.name.toLowerCase();
             return allowedNames.has(itemName);
@@ -196,10 +205,11 @@ export const uploadToOneDrive = async (file: File, config: AppConfig, user: User
     let folderPath = '';
 
     if (destination === 'personal') {
-        // --- LOGIC PATH CHÍNH XÁC: Dùng user.unit làm tên folder ---
-        // Ví dụ: SnapSync302/Tiểu đoàn thông tin 18/T09/Tuần_1
+        // --- LOGIC PATH MỚI: Dùng Leaf Unit Name ---
+        // Ví dụ: SnapSync302/Đại đội 18/T09/Tuần_1
+        const leafUnit = getLeafUnitName(user.unit);
         const timePath = getCurrentWeekFolder();
-        folderPath = `${config.targetFolder}/${user.unit}/${timePath}`;
+        folderPath = `${config.targetFolder}/${leafUnit}/${timePath}`;
     } else {
         // Tư liệu chung chờ duyệt: Vẫn giữ username để biết ai gửi để admin duyệt
         folderPath = `${config.targetFolder}/Tu_lieu_chung_Cho_duyet/${user.username}`;
@@ -258,7 +268,6 @@ export const moveOneDriveItem = async (config: AppConfig, itemId: string, destFo
          const token = await getAccessToken();
 
          // 1. Lấy ID của thư mục đích (VD: Tu_lieu_chung)
-         // Search chính xác tên folder tại root của App
          const destPathUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${destFolderName}?select=id,name`;
          const destRes = await fetch(destPathUrl, { headers: { 'Authorization': `Bearer ${token}` } });
          
@@ -273,8 +282,6 @@ export const moveOneDriveItem = async (config: AppConfig, itemId: string, destFo
          // 2. Thực hiện lệnh MOVE (PATCH parentReference)
          const moveUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}`;
          
-         // Payload chuẩn để Move trong Graph API: Chỉ cần gửi parentReference id mới
-         // Name để undefined để giữ nguyên tên cũ
          const moveBody = {
              parentReference: {
                  id: targetFolderId
@@ -361,8 +368,7 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     try {
         const token = await getAccessToken();
         
-        // --- SỬ DỤNG LẠI SEARCH API (CÁCH CŨ) ---
-        // Search ngay tại thư mục gốc của App để tìm tất cả file
+        // --- SỬ DỤNG SEARCH API ---
         const selectFields = "select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference,thumbnails,@microsoft.graph.downloadUrl";
         const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?${selectFields}&top=200`;
         
@@ -375,9 +381,7 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
 
         // --- LỌC KẾT QUẢ CHO USER THƯỜNG ---
         if (user.role !== 'admin') {
-            // Lọc các file nằm trong thư mục có tên trùng với user.unit
-            // ParentPath thường có dạng: "/drive/root:/SnapSync302/Tiểu đoàn thông tin 18/T09/..."
-            const userUnitName = user.unit.toLowerCase();
+            const leafUnit = getLeafUnitName(user.unit).toLowerCase();
             const username = user.username.toLowerCase();
             
             items = items.filter((i: any) => {
@@ -385,9 +389,9 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
                 const decodedPath = decodeURIComponent(path).toLowerCase();
                 
                 // User thấy file nếu:
-                // 1. File nằm trong folder Đơn vị của họ
-                // 2. File nằm trong folder Chờ duyệt của họ (username)
-                return decodedPath.includes(`/${userUnitName}`) || 
+                // 1. File nằm trong folder Đơn vị cấp cuối của họ (VD: "đại đội 18")
+                // 2. File nằm trong folder Chờ duyệt của họ
+                return decodedPath.includes(`/${leafUnit}`) || 
                        decodedPath.includes(`/${username}`) ||
                        decodedPath.includes('tu_lieu_chung_cho_duyet');
             });
@@ -465,10 +469,10 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
          let items = data.value || [];
          
          // Filter User View
-         const userUnitName = user.unit.toLowerCase();
+         const leafUnit = getLeafUnitName(user.unit).toLowerCase();
          items = items.filter((i: any) => {
              const path = decodeURIComponent(i.parentReference?.path || "").toLowerCase();
-             return path.includes(userUnitName) || path.includes('tu_lieu_chung') || path.includes(user.username.toLowerCase());
+             return path.includes(leafUnit) || path.includes('tu_lieu_chung') || path.includes(user.username.toLowerCase());
          });
          
          return items.filter((i:any) => i.file).map(mapGraphItemToCloudItem);
