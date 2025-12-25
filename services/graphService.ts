@@ -1,4 +1,3 @@
-
 // BCT0902
 import { AppConfig, User, SystemConfig, CloudItem, PhotoRecord, UploadStatus, SystemStats, QRCodeLog, VisitorRecord } from '../types';
 import { INITIAL_USERS } from './mockAuth';
@@ -516,25 +515,33 @@ export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> 
     if (config.simulateMode) return { totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 };
     try {
         const token = await getAccessToken();
+        
+        // 1. Get Storage Usage (Direct call to root)
         const folderInfoUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}?select=size`;
-        // Search all files for count
-        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?select=id,file&top=999`;
-        
-        const [folderRes, searchRes] = await Promise.all([
-            fetch(folderInfoUrl, { headers: { 'Authorization': `Bearer ${token}` } }),
-            fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } })
-        ]);
-        
+        const folderRes = await fetch(folderInfoUrl, { headers: { 'Authorization': `Bearer ${token}` } });
         let totalStorage = 0;
-        let totalFiles = 0;
-
         if (folderRes.ok) {
             const folderData = await folderRes.json();
             totalStorage = folderData.size || 0;
         }
-        if (searchRes.ok) {
-            const searchData = await searchRes.json();
-            totalFiles = searchData.value ? searchData.value.filter((i:any) => i.file).length : 0;
+
+        // 2. Count Files (Handle Pagination for accuracy > 999 files)
+        let totalFiles = 0;
+        let searchUrl: string | null = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?select=id,file&top=999`;
+        
+        while (searchUrl) {
+            const res = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (!res.ok) break;
+            
+            const data = await res.json();
+            
+            // Count items that are files
+            if (data.value) {
+                totalFiles += data.value.filter((i: any) => i.file).length;
+            }
+            
+            // Check for next page link
+            searchUrl = data['@odata.nextLink'] || null;
         }
 
         return { totalUsers: 0, activeUsers: 0, totalFiles, totalStorage };
