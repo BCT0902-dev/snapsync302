@@ -142,34 +142,27 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
     const data = await res.json();
     let items = data.value as any[];
     
-    // --- PHÂN QUYỀN HIỂN THỊ (SỬA LẠI LOGIC) ---
-    // Logic: Nếu là user thường và đang ở thư mục gốc (cleanPath rỗng)
+    // --- PHÂN QUYỀN HIỂN THỊ (SỬA LẠI THEO YÊU CẦU) ---
+    // Logic: Nếu là user thường và đang ở thư mục gốc (path rỗng)
     if (user && user.role !== 'admin' && !cleanPath) {
         const allowedNames = new Set<string>();
         
-        // 1. Thư mục Đơn vị (Unit): Lấy phần đầu tiên của Unit
-        // Ví dụ: user.unit = "Sư đoàn 302/Phòng Tham mưu" -> Folder là "Sư đoàn 302" (nếu cấu trúc lồng nhau) hoặc chính xác tên unit nếu admin tạo phẳng.
-        // Để an toàn và đúng logic user yêu cầu: User d18 -> Folder Tiểu đoàn 18.
-        // Ta sẽ cho phép user thấy folder có tên TRÙNG hoặc CHỨA tên unit của họ.
-        // Hoặc đơn giản nhất: Cho phép thấy folder khớp với user.unit (hoặc phần đầu của nó).
+        // 1. Thư mục Đơn vị: Dùng chính xác tên unit của user
+        // Ví dụ: User "d18" có unit "Tiểu đoàn thông tin 18" -> Folder tên là "Tiểu đoàn thông tin 18"
+        allowedNames.add(user.unit.toLowerCase()); 
         
-        // Cách tốt nhất: Lấy root segment của Unit.
-        const unitRoot = user.unit.split('/')[0].toLowerCase();
-        allowedNames.add(unitRoot);
-        allowedNames.add(user.unit.toLowerCase()); // Thêm cả full path cho chắc
-
         // 2. Thư mục chung
         allowedNames.add('tu_lieu_chung');
         
-        // 3. Các thư mục được Admin cấp quyền
+        // 3. Các thư mục được Admin cấp quyền riêng (nếu có)
         if (user.allowedPaths && Array.isArray(user.allowedPaths)) {
             user.allowedPaths.forEach(p => allowedNames.add(p.toLowerCase()));
         }
 
-        // Thực hiện lọc: Chỉ hiện folder có tên nằm trong danh sách cho phép
+        // Thực hiện lọc: So sánh chính xác tên folder
         items = items.filter(item => {
             const itemName = item.name.toLowerCase();
-            return allowedNames.has(itemName) || itemName.includes(unitRoot); // Mở rộng điều kiện lọc
+            return allowedNames.has(itemName);
         });
     }
 
@@ -203,12 +196,12 @@ export const uploadToOneDrive = async (file: File, config: AppConfig, user: User
     let folderPath = '';
 
     if (destination === 'personal') {
-        // --- SỬA LOGIC PATH: Dùng user.unit thay vì user.username ---
-        // Ví dụ: SnapSync302/Tiểu đoàn 18/T02/Tuần_4
+        // --- LOGIC PATH CHÍNH XÁC: Dùng user.unit làm tên folder ---
+        // Ví dụ: SnapSync302/Tiểu đoàn thông tin 18/T09/Tuần_1
         const timePath = getCurrentWeekFolder();
         folderPath = `${config.targetFolder}/${user.unit}/${timePath}`;
     } else {
-        // Tư liệu chung chờ duyệt: Vẫn giữ username để biết ai gửi
+        // Tư liệu chung chờ duyệt: Vẫn giữ username để biết ai gửi để admin duyệt
         folderPath = `${config.targetFolder}/Tu_lieu_chung_Cho_duyet/${user.username}`;
     }
         
@@ -280,12 +273,13 @@ export const moveOneDriveItem = async (config: AppConfig, itemId: string, destFo
          // 2. Thực hiện lệnh MOVE (PATCH parentReference)
          const moveUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}`;
          
-         // Payload chuẩn để Move trong Graph API
+         // Payload chuẩn để Move trong Graph API: Chỉ cần gửi parentReference id mới
+         // Name để undefined để giữ nguyên tên cũ
          const moveBody = {
              parentReference: {
                  id: targetFolderId
              },
-             name: undefined // Giữ nguyên tên file
+             name: undefined 
          };
 
          const moveRes = await fetch(moveUrl, {
@@ -368,9 +362,9 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
         const token = await getAccessToken();
         
         // --- SỬ DỤNG LẠI SEARCH API (CÁCH CŨ) ---
-        // Nhưng Search ngay tại thư mục gốc của App để bao quát hết
+        // Search ngay tại thư mục gốc của App để tìm tất cả file
         const selectFields = "select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference,thumbnails,@microsoft.graph.downloadUrl";
-        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?${selectFields}&top=100`;
+        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?${selectFields}&top=200`;
         
         const res = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
         
@@ -381,15 +375,21 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
 
         // --- LỌC KẾT QUẢ CHO USER THƯỜNG ---
         if (user.role !== 'admin') {
-            const unitRoot = user.unit.split('/')[0].toLowerCase(); // Ví dụ: "tiểu đoàn 18"
+            // Lọc các file nằm trong thư mục có tên trùng với user.unit
+            // ParentPath thường có dạng: "/drive/root:/SnapSync302/Tiểu đoàn thông tin 18/T09/..."
+            const userUnitName = user.unit.toLowerCase();
+            const username = user.username.toLowerCase();
+            
             items = items.filter((i: any) => {
                 const path = i.parentReference?.path || "";
                 const decodedPath = decodeURIComponent(path).toLowerCase();
                 
-                // User thấy file nếu file đó nằm trong folder chứa tên Unit của họ 
-                // HOẶC file nằm trong folder 'Tu_lieu_chung_Cho_duyet/username' (file họ up vào chung)
-                return decodedPath.includes(unitRoot) || 
-                       decodedPath.includes(user.username.toLowerCase());
+                // User thấy file nếu:
+                // 1. File nằm trong folder Đơn vị của họ
+                // 2. File nằm trong folder Chờ duyệt của họ (username)
+                return decodedPath.includes(`/${userUnitName}`) || 
+                       decodedPath.includes(`/${username}`) ||
+                       decodedPath.includes('tu_lieu_chung_cho_duyet');
             });
         }
 
@@ -457,7 +457,7 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
              return Array.from(uniqueMap.values()).map(mapGraphItemToCloudItem);
          } 
          
-         // USER THƯỜNG: Dùng Search cho nhanh và cover được nhiều folder con
+         // USER THƯỜNG: Dùng Search cho nhanh
          const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?${selectFields}&top=999`;
          const res = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
          if(!res.ok) return [];
@@ -465,10 +465,10 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
          let items = data.value || [];
          
          // Filter User View
-         const unitRoot = user.unit.split('/')[0].toLowerCase();
+         const userUnitName = user.unit.toLowerCase();
          items = items.filter((i: any) => {
              const path = decodeURIComponent(i.parentReference?.path || "").toLowerCase();
-             return path.includes(unitRoot) || path.includes('tu_lieu_chung') || path.includes(user.username.toLowerCase());
+             return path.includes(userUnitName) || path.includes('tu_lieu_chung') || path.includes(user.username.toLowerCase());
          });
          
          return items.filter((i:any) => i.file).map(mapGraphItemToCloudItem);
