@@ -1,3 +1,4 @@
+
 // BCT0902
 import React, { useState, useEffect, useRef } from 'react';
 import { 
@@ -1076,16 +1077,19 @@ export default function App() {
 
     const handleLoadError = async () => {
         // Nếu đã retry hoặc không có URL, đánh dấu lỗi và dừng
-        if (isRetrying || !record.previewUrl) {
+        if (isRetrying || !record.id) {
             setHasError(true);
             return;
         }
 
-        // Bắt đầu retry bằng Token
+        // Bắt đầu retry bằng Token (Dùng endpoint content thay vì downloadUrl)
         setIsRetrying(true);
         try {
             const token = await getAccessToken();
-            const res = await fetch(record.previewUrl, {
+            // Fallback sang API Content chuẩn của Graph
+            const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${record.id}/content`;
+            
+            const res = await fetch(contentUrl, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             
