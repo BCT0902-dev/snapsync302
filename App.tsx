@@ -22,7 +22,8 @@ import {
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
   BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock, Globe,
-  FolderLock, ChevronDown, QrCode, ExternalLink, HeartHandshake, AlertCircle, User as UserIcon, PlayCircle
+  FolderLock, ChevronDown, QrCode, ExternalLink, HeartHandshake, AlertCircle, User as UserIcon, PlayCircle,
+  Monitor
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -65,7 +66,8 @@ interface ExtendedCloudItem extends CloudItem {
 const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConfig: SystemConfig }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [fileData, setFileData] = useState<{name: string, url: string, mimeType: string, size: number} | null>(null);
+    const [fileData, setFileData] = useState<{name: string, url: string, mimeType: string, size: number, downloadUrl?: string} | null>(null);
+    const [pdfViewMode, setPdfViewMode] = useState<'google' | 'native'>('google'); // 'google' is better for mobile
 
     useEffect(() => {
         const loadFile = async () => {
@@ -73,8 +75,8 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                 // Lấy Access Token (Service Token)
                 const token = await getAccessToken();
                 
-                // 1. Lấy thông tin file (Metadata)
-                const metaUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}?select=id,name,file,size`;
+                // 1. Lấy thông tin file (Metadata) - Lấy thêm @microsoft.graph.downloadUrl
+                const metaUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}?select=id,name,file,size,@microsoft.graph.downloadUrl`;
                 const metaRes = await fetch(metaUrl, { headers: { 'Authorization': `Bearer ${token}` } });
                 
                 if (!metaRes.ok) {
@@ -84,7 +86,7 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                 const meta = await metaRes.json();
                 const fileName = meta.name;
 
-                // 2. Lấy nội dung file (Binary Content)
+                // 2. Lấy nội dung file (Binary Content) - Vẫn giữ để làm nút Download và làm fallback
                 const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/content`;
                 const contentRes = await fetch(contentUrl, { headers: { 'Authorization': `Bearer ${token}` } });
                 
@@ -119,7 +121,8 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                     name: fileName,
                     url: url,
                     mimeType: mimeType,
-                    size: meta.size
+                    size: meta.size,
+                    downloadUrl: meta['@microsoft.graph.downloadUrl'] // Link công khai tạm thời
                 });
             } catch (e: any) {
                 console.error(e);
@@ -212,26 +215,48 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
             {/* Viewer Content - Fills remaining space */}
             <div className={`flex-1 relative w-full h-full overflow-hidden flex items-center justify-center ${isDarkTheme ? 'bg-black' : 'bg-slate-100'}`}>
                 {fileType === 'pdf' ? (
-                     <object
-                        data={`${fileData?.url}#view=FitH`}
-                        type="application/pdf"
-                        className="w-full h-full block bg-white"
-                    >
-                        {/* Fallback */}
-                        <div className="flex flex-col items-center justify-center h-full p-6 text-center text-slate-500">
-                            <FileIcon className="w-16 h-16 text-slate-300 mb-4" />
-                            <p className="mb-2 font-bold text-slate-700">Không thể xem trực tiếp</p>
-                            <p className="text-sm mb-6">Trình duyệt này không hỗ trợ xem PDF nhúng.</p>
-                            <a 
-                                href={fileData?.url} 
-                                download={fileData?.name} 
-                                className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold shadow-lg hover:bg-emerald-700 w-full max-w-xs"
+                    <div className="w-full h-full relative flex flex-col">
+                        {/* PDF Toggle Button */}
+                        <div className="absolute bottom-16 right-4 z-40">
+                            <button 
+                                onClick={() => setPdfViewMode(prev => prev === 'google' ? 'native' : 'google')}
+                                className="bg-slate-800 text-white text-xs px-3 py-2 rounded-full shadow-lg opacity-80 hover:opacity-100 flex items-center gap-2 backdrop-blur-sm"
                             >
-                                <Download className="w-5 h-5 inline-block mr-2" />
-                                Tải về máy
-                            </a>
+                                <RefreshCw className="w-3 h-3" />
+                                {pdfViewMode === 'google' ? 'Dùng trình đọc Gốc' : 'Dùng Google Reader'}
+                            </button>
                         </div>
-                    </object>
+
+                        {pdfViewMode === 'google' && fileData?.downloadUrl ? (
+                            // MODE 1: GOOGLE DOCS VIEWER (Chống biến dạng trên mobile)
+                            <iframe 
+                                src={`https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(fileData.downloadUrl)}`}
+                                className="w-full h-full border-0 bg-white"
+                                title="PDF Viewer"
+                            />
+                        ) : (
+                            // MODE 2: NATIVE OBJECT (Fallback)
+                            <object
+                                data={`${fileData?.url}#view=FitH`}
+                                type="application/pdf"
+                                className="w-full h-full block bg-white"
+                            >
+                                <div className="flex flex-col items-center justify-center h-full p-6 text-center text-slate-500">
+                                    <FileIcon className="w-16 h-16 text-slate-300 mb-4" />
+                                    <p className="mb-2 font-bold text-slate-700">Không thể xem trực tiếp</p>
+                                    <p className="text-sm mb-6">Vui lòng tải về để xem.</p>
+                                    <a 
+                                        href={fileData?.url} 
+                                        download={fileData?.name} 
+                                        className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold shadow-lg hover:bg-emerald-700 w-full max-w-xs"
+                                    >
+                                        <Download className="w-5 h-5 inline-block mr-2" />
+                                        Tải về máy
+                                    </a>
+                                </div>
+                            </object>
+                        )}
+                    </div>
                 ) : fileType === 'image' ? (
                     <div className="w-full h-full overflow-auto flex items-center justify-center p-2">
                         <img 
