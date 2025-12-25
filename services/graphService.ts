@@ -274,8 +274,8 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
         const userRootPath = `${config.targetFolder}/${user.username}`;
         
         // --- 1. TÌM KIẾM TOÀN BỘ (HISTORY) ---
-        // Sử dụng q=' ' (khoảng trắng) thay vì '*' để tìm tất cả file hiệu quả hơn
-        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}:/search(q=' ')?select=id,name,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
+        // Sử dụng q='*' để tìm mọi thứ
+        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}:/search(q='*')?select=id,name,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
         
         // --- 2. QUÉT TRỰC TIẾP TOÀN BỘ THÁNG NÀY (TUẦN 1 -> TUẦN 5) ---
         // Khắc phục triệt để độ trễ Search Index cho cả tháng
@@ -369,18 +369,31 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
      if (config.simulateMode) return [];
      try {
          const token = await getAccessToken();
-         // CẬP NHẬT: search(q=' ') (Space) để lấy TẤT CẢ mọi thứ
-         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?expand=thumbnails&top=999`;
+         
+         // 1. Dùng q='*' để lấy tất cả. Quan trọng: Lấy thêm parentReference để check folder cha
+         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='*')?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl,parentReference&top=999`;
+         
          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
          if (!res.ok) return [];
          const data = await res.json();
          
-         // Lọc lấy file, NHƯNG loại bỏ file hệ thống (json) để Gallery sạch
+         // 2. Lọc file hệ thống
          const systemFiles = ['users.json', 'config.json', 'qrcodes.json'];
-         
-         return data.value
-            .filter((i:any) => i.file && !systemFiles.includes(i.name.toLowerCase()))
-            .map(mapGraphItemToCloudItem);
+         let allFiles = data.value.filter((i:any) => i.file && !systemFiles.includes(i.name.toLowerCase()));
+
+         // 3. LOGIC PHÂN QUYỀN:
+         // - Admin: Thấy hết
+         // - User: Chỉ thấy file có đường dẫn chứa username CỦA HỌ hoặc thư mục chung (Tu_lieu_chung)
+         if (user.role !== 'admin') {
+             allFiles = allFiles.filter((i: any) => {
+                 // parentReference.path có dạng: "/drive/root:/SnapSync302/user1/..."
+                 const path = i.parentReference?.path || "";
+                 // Kiểm tra xem path có chứa username hoặc folder chung không
+                 return path.includes(`/${user.username}`) || path.includes("/Tu_lieu_chung");
+             });
+         }
+
+         return allFiles.map(mapGraphItemToCloudItem);
      } catch (e) { return []; }
 };
 
@@ -389,20 +402,32 @@ export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> 
     try {
         const token = await getAccessToken();
         
-        // CẬP NHẬT: Search toàn bộ file (q=' ') và bỏ select để lấy full object (an toàn hơn)
-        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?top=999`;
-        const searchRes = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+        // BƯỚC 1: Lấy thông tin Folder Gốc để có DUNG LƯỢNG chuẩn xác nhất (recursive size)
+        const folderInfoUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}?select=size`;
+        
+        // BƯỚC 2: Search đếm file (gần đúng cho < 1000 items hoặc pagination nếu cần, ở đây top=999)
+        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='*')?select=id,file&top=999`;
+
+        const [folderRes, searchRes] = await Promise.all([
+            fetch(folderInfoUrl, { headers: { 'Authorization': `Bearer ${token}` } }),
+            fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } })
+        ]);
         
         let totalFiles = 0;
         let totalStorage = 0;
 
+        // Xử lý Dung lượng (Chính xác từ folder metadata)
+        if (folderRes.ok) {
+            const folderData = await folderRes.json();
+            totalStorage = folderData.size || 0;
+        }
+
+        // Xử lý Số lượng file
         if (searchRes.ok) {
             const searchData = await searchRes.json();
-            // Lọc item là file (bỏ qua folder)
+            // Đếm các item có thuộc tính 'file'
             const files = searchData.value ? searchData.value.filter((i: any) => i.file) : [];
             totalFiles = files.length;
-            // Cộng dồn size của từng file thực tế
-            totalStorage = files.reduce((acc: number, curr: any) => acc + (curr.size || 0), 0);
         }
 
         return { totalUsers: 0, activeUsers: 0, totalFiles, totalStorage };
