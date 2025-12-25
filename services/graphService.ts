@@ -313,6 +313,26 @@ export const createShareLink = async (config: AppConfig, itemId: string): Promis
     if (config.simulateMode) return "http://mock.share.link";
     try {
         const token = await getAccessToken();
+
+        // BƯỚC 1: KIỂM TRA LINK CŨ TRƯỚC (Tránh lỗi tạo trùng)
+        try {
+            const permUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/permissions`;
+            const permRes = await fetch(permUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (permRes.ok) {
+                const permData = await permRes.json();
+                // Tìm permission loại anonymous (công khai) và type view
+                const existing = permData.value?.find((p: any) => 
+                    p.link && p.link.scope === 'anonymous' && p.link.type === 'view'
+                );
+                if (existing) {
+                    return existing.link.webUrl;
+                }
+            }
+        } catch (ignored) {
+            console.warn("Could not check existing permissions, trying creation anyway.");
+        }
+
+        // BƯỚC 2: TẠO MỚI NẾU CHƯA CÓ
         const url = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/createLink`;
         let body = { type: 'view', scope: 'anonymous' };
         let res = await fetch(url, {
@@ -320,8 +340,11 @@ export const createShareLink = async (config: AppConfig, itemId: string): Promis
             headers: getHeaders(token),
             body: JSON.stringify(body)
         });
+        
         if (!res.ok) {
-             throw new Error("Tổ chức không cho phép chia sẻ công khai (Anonymous).");
+             const errorData = await res.json().catch(() => ({}));
+             // Nếu lỗi nhưng thông báo là link đã tồn tại (dù bước 1 check miss), thử lấy lại permission lần nữa
+             throw new Error(errorData.error?.message || "Tổ chức không cho phép chia sẻ công khai (Anonymous).");
         }
         const data = await res.json();
         return data.link.webUrl;
