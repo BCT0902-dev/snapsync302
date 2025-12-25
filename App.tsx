@@ -5,7 +5,7 @@ import {
   getAccessToken, listPathContents, fetchSystemStats, fetchAllMedia, deleteFileFromOneDrive,
   renameOneDriveItem, aggregateUserStats, moveOneDriveItem, fetchFolderChildren,
   fetchQRCodeLogs, saveQRCodeLog, deleteQRCodeLog, fetchUsersFromOneDrive, saveUsersToOneDrive,
-  createShareLink, uploadToOneDrive
+  uploadToOneDrive
 } from './services/graphService';
 import { INITIAL_USERS, login } from './services/mockAuth';
 import { Button } from './components/Button';
@@ -18,12 +18,12 @@ import { AppConfig, User, SystemConfig, CloudItem, PhotoRecord, UploadStatus, Sy
 import { 
   Camera, LogOut, Info, Settings, History, CheckCircle, XCircle, 
   Loader2, Image as ImageIcon, Users, Trash2, Plus, Edit,
-  FileArchive, Film, FolderUp, Files, File as FileIcon, RefreshCw, Database,
-  Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
-  AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
-  BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock, Globe,
-  FolderLock, ChevronDown, QrCode, ExternalLink, HeartHandshake, AlertCircle, User as UserIcon, PlayCircle,
-  Monitor
+  Files, File as FileIcon, RefreshCw, Database,
+  Share2, Folder, FolderUp, ChevronLeft, ChevronRight, Download,
+  AlertTriangle, Shield, Palette, Save, UserPlus, Grid, 
+  Square, CheckSquare, Clock, Globe,
+  FolderLock, ChevronDown, QrCode, ExternalLink, HeartHandshake, Library, Home,
+  BarChart3, Pencil, UploadCloud, Calculator
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -62,6 +62,7 @@ interface ExtendedCloudItem extends CloudItem {
   hasLoadedChildren?: boolean;
 }
 
+// --- FIX: MOVE TABBUTTON DEFINITION HERE (BEFORE USE) ---
 const TabButton = ({ active, onClick, icon, label, color }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string, color?: string }) => (
   <button onClick={onClick} className={`flex flex-col items-center justify-center w-full py-1 transition-all duration-200 ${active ? 'scale-105' : 'text-slate-400 hover:text-slate-600'}`} style={active ? { color: color } : {}}>
     <div className={`w-6 h-6 ${active ? 'fill-current' : ''}`}>
@@ -76,15 +77,12 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [fileData, setFileData] = useState<{name: string, url: string, mimeType: string, size: number, downloadUrl?: string} | null>(null);
-    const [pdfViewMode, setPdfViewMode] = useState<'google' | 'native'>('google'); // 'google' is better for mobile
+    const [pdfViewMode, setPdfViewMode] = useState<'google' | 'native'>('google');
 
     useEffect(() => {
         const loadFile = async () => {
             try {
-                // Lấy Access Token (Service Token)
                 const token = await getAccessToken();
-                
-                // 1. Lấy thông tin file (Metadata) - Lấy thêm @microsoft.graph.downloadUrl
                 const metaUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}?select=id,name,file,size,@microsoft.graph.downloadUrl`;
                 const metaRes = await fetch(metaUrl, { headers: { 'Authorization': `Bearer ${token}` } });
                 
@@ -95,7 +93,6 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                 const meta = await metaRes.json();
                 const fileName = meta.name;
 
-                // 2. Lấy nội dung file (Binary Content) - Vẫn giữ để làm nút Download và làm fallback
                 const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/content`;
                 const contentRes = await fetch(contentUrl, { headers: { 'Authorization': `Bearer ${token}` } });
                 
@@ -103,8 +100,6 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
 
                 let blob = await contentRes.blob();
                 
-                // --- LOGIC QUAN TRỌNG: ÉP KIỂU MIME TYPE DỰA TRÊN ĐUÔI FILE ---
-                // OneDrive đôi khi trả về 'application/octet-stream' cho ảnh/video/pdf...
                 let mimeType = meta.file?.mimeType || 'application/octet-stream';
                 
                 if (mimeType === 'application/octet-stream' || !mimeType) {
@@ -112,15 +107,9 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                     if (['jpg', 'jpeg'].includes(ext)) mimeType = 'image/jpeg';
                     else if (['png'].includes(ext)) mimeType = 'image/png';
                     else if (['gif'].includes(ext)) mimeType = 'image/gif';
-                    else if (['webp'].includes(ext)) mimeType = 'image/webp';
-                    else if (['bmp'].includes(ext)) mimeType = 'image/bmp';
-                    else if (['heic'].includes(ext)) mimeType = 'image/heic';
                     else if (['mp4', 'm4v'].includes(ext)) mimeType = 'video/mp4';
-                    else if (['mov'].includes(ext)) mimeType = 'video/quicktime';
-                    else if (['webm'].includes(ext)) mimeType = 'video/webm';
-                    else if (['pdf'].includes(ext)) mimeType = 'application/pdf'; // Hỗ trợ PDF
+                    else if (['pdf'].includes(ext)) mimeType = 'application/pdf';
                     
-                    // Tạo lại Blob mới với đúng MIME type để trình duyệt hiểu
                     blob = blob.slice(0, blob.size, mimeType);
                 }
 
@@ -131,7 +120,7 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                     url: url,
                     mimeType: mimeType,
                     size: meta.size,
-                    downloadUrl: meta['@microsoft.graph.downloadUrl'] // Link công khai tạm thời
+                    downloadUrl: meta['@microsoft.graph.downloadUrl']
                 });
             } catch (e: any) {
                 console.error(e);
@@ -143,7 +132,6 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
         loadFile();
     }, [fileId]);
 
-    // Helpers xác định loại file (Check cả MIME Type đã fix và Đuôi file)
     const fileType = useMemo(() => {
         if (!fileData) return 'unknown';
         const name = fileData.name.toLowerCase();
@@ -155,7 +143,6 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
         return 'other';
     }, [fileData]);
 
-    // Theme Config based on file type
     const isDarkTheme = fileType === 'video';
 
     if (loading) return (
@@ -180,7 +167,6 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
 
     return (
         <div className={`h-[100dvh] flex flex-col relative overflow-hidden ${isDarkTheme ? 'bg-black' : 'bg-slate-50'}`}>
-            {/* Header: Absolute for Video (Overlay), Relative for PDF/Image (Solid) */}
             <div className={`
                 flex-none z-30 transition-all
                 ${isDarkTheme 
@@ -221,11 +207,9 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                 </div>
             </div>
 
-            {/* Viewer Content - Fills remaining space */}
             <div className={`flex-1 relative w-full h-full overflow-hidden flex items-center justify-center ${isDarkTheme ? 'bg-black' : 'bg-slate-100'}`}>
                 {fileType === 'pdf' ? (
                     <div className="w-full h-full relative flex flex-col">
-                        {/* PDF Toggle Button */}
                         <div className="absolute bottom-16 right-4 z-40">
                             <button 
                                 onClick={() => setPdfViewMode(prev => prev === 'google' ? 'native' : 'google')}
@@ -237,14 +221,12 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                         </div>
 
                         {pdfViewMode === 'google' && fileData?.downloadUrl ? (
-                            // MODE 1: GOOGLE DOCS VIEWER (Chống biến dạng trên mobile)
                             <iframe 
                                 src={`https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(fileData.downloadUrl)}`}
                                 className="w-full h-full border-0 bg-white"
                                 title="PDF Viewer"
                             />
                         ) : (
-                            // MODE 2: NATIVE OBJECT (Fallback)
                             <object
                                 data={`${fileData?.url}#view=FitH`}
                                 type="application/pdf"
@@ -253,7 +235,6 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                                 <div className="flex flex-col items-center justify-center h-full p-6 text-center text-slate-500">
                                     <FileIcon className="w-16 h-16 text-slate-300 mb-4" />
                                     <p className="mb-2 font-bold text-slate-700">Không thể xem trực tiếp</p>
-                                    <p className="text-sm mb-6">Vui lòng tải về để xem.</p>
                                     <a 
                                         href={fileData?.url} 
                                         download={fileData?.name} 
@@ -380,15 +361,12 @@ export default function App() {
 
   // Share View
   const [sharingItem, setSharingItem] = useState<string | null>(null); 
-  const [downloadingFolderId, setDownloadingFolderId] = useState<string | null>(null);
   
   // Guest View Params
   const [guestViewParams, setGuestViewParams] = useState<{unit: string, month: string} | null>(null);
   const [sharedFileId, setSharedFileId] = useState<string | null>(null);
   
   // Action State
-  const [isRenaming, setIsRenaming] = useState<string | null>(null);
-
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const multiFileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -402,7 +380,6 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const view = params.get('view');
     
-    // 1. Guest Check-in QR
     if (view === 'guest-visit') {
         const unit = params.get('unit');
         const month = params.get('month');
@@ -413,7 +390,6 @@ export default function App() {
         }
     }
     
-    // 2. Shared File QR (NEW LOGIC)
     if (view === 'share') {
         const id = params.get('id');
         if (id) {
@@ -2093,7 +2069,7 @@ export default function App() {
                                                 />
                                             </div>
                                             <div className="ml-3 min-w-0">
-                                                <p className="text-sm font-medium truncate ${isAllowed ? 'text-emerald-700' : 'text-slate-700'}`}>{folder.name}</p>
+                                                <p className={`text-sm font-medium truncate ${isAllowed ? 'text-emerald-700' : 'text-slate-700'}`}>{folder.name}</p>
                                             </div>
                                         </label>
                                     </div>
