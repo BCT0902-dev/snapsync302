@@ -320,10 +320,20 @@ export const createShareLink = async (config: AppConfig, itemId: string): Promis
             const permRes = await fetch(permUrl, { headers: { 'Authorization': `Bearer ${token}` } });
             if (permRes.ok) {
                 const permData = await permRes.json();
-                // Tìm permission loại anonymous (công khai) và type view
-                const existing = permData.value?.find((p: any) => 
-                    p.link && p.link.scope === 'anonymous' && p.link.type === 'view'
-                );
+                
+                // Tìm permission loại anonymous (công khai), type view, VÀ chưa hết hạn
+                const existing = permData.value?.find((p: any) => {
+                    const isAnonymous = p.link && p.link.scope === 'anonymous' && p.link.type === 'view';
+                    if (!isAnonymous) return false;
+                    
+                    // Check expiration if present
+                    if (p.expirationDateTime) {
+                        const expiry = new Date(p.expirationDateTime);
+                        if (expiry < new Date()) return false; // Link đã hết hạn
+                    }
+                    return true;
+                });
+
                 if (existing) {
                     return existing.link.webUrl;
                 }
