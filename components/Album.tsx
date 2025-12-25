@@ -24,43 +24,18 @@ const GalleryItem = ({ item, isSelected, onToggleSelect, onClick }: {
     onToggleSelect?: (id: string) => void,
     onClick: (item: CloudItem) => void
 }) => {
-    // FIX: Ưu tiên Large URL để ảnh lưới nét hơn
-    const initialSrc = item.largeUrl || item.mediumUrl || item.thumbnailUrl || item.downloadUrl;
+    // Ưu tiên ảnh Medium cho Grid
+    const initialSrc = item.mediumUrl || item.thumbnailUrl || item.downloadUrl;
     const [src, setSrc] = useState<string | undefined>(initialSrc);
-    const [isRetrying, setIsRetrying] = useState(false);
     const [hasError, setHasError] = useState(false);
 
     useEffect(() => {
-        setSrc(item.largeUrl || item.mediumUrl || item.thumbnailUrl || item.downloadUrl);
+        setSrc(item.mediumUrl || item.thumbnailUrl || item.downloadUrl);
         setHasError(false);
-        setIsRetrying(false);
     }, [item]);
 
-    const handleLoadError = async () => {
-        if (isRetrying || !item.downloadUrl) {
-            setHasError(true);
-            return;
-        }
-        
-        // Fallback: Nếu thumbnail lỗi, thử tải file gốc
-        setIsRetrying(true);
-        try {
-            // QUAN TRỌNG: Thử tải không header trước (Link public/signed)
-            const headers: Record<string, string> = {}; 
-            let res = await fetch(item.downloadUrl, { headers });
-            
-            if (res.ok) {
-                const blob = await res.blob();
-                const blobUrl = URL.createObjectURL(blob);
-                setSrc(blobUrl);
-            } else {
-                setHasError(true);
-            }
-        } catch (e) {
-            setHasError(true);
-        } finally {
-            setIsRetrying(false);
-        }
+    const handleLoadError = () => {
+        setHasError(true);
     };
 
     return (
@@ -69,20 +44,13 @@ const GalleryItem = ({ item, isSelected, onToggleSelect, onClick }: {
             onClick={() => onClick(item)}
         >
             {!hasError && src ? (
-                <>
-                    <img 
-                        src={src} 
-                        alt={item.name} 
-                        className={`w-full h-full object-cover transition-transform duration-500 hover:scale-110 ${isRetrying ? 'opacity-50' : 'opacity-100'}`} 
-                        loading="lazy"
-                        onError={handleLoadError}
-                    />
-                    {isRetrying && (
-                        <div className="absolute inset-0 flex items-center justify-center">
-                            <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
-                        </div>
-                    )}
-                </>
+                <img 
+                    src={src} 
+                    alt={item.name} 
+                    className="w-full h-full object-cover transition-transform duration-500 hover:scale-110"
+                    loading="lazy"
+                    onError={handleLoadError}
+                />
             ) : (
                 <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-1 bg-slate-50">
                     <FileIcon className="w-8 h-8 mb-1 opacity-50" />
@@ -121,12 +89,9 @@ export const Album: React.FC<AlbumProps> = ({
 }) => {
   const [selectedItem, setSelectedItem] = useState<CloudItem | null>(null);
   
-  // States cho Full View Modal
+  // State hiển thị ảnh full
   const [fullViewSrc, setFullViewSrc] = useState<string | undefined>("");
   const [isImgLoading, setIsImgLoading] = useState(false);
-  
-  // HD Loading State: Đang tải file gốc đè lên thumbnail
-  const [isHDLoading, setIsHDLoading] = useState(false); 
   
   const [isDownloading, setIsDownloading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -134,65 +99,60 @@ export const Album: React.FC<AlbumProps> = ({
 
   const mediaItems = items.filter(i => i.file);
 
-  // Effect: Tự động tải ảnh HD khi mở item
+  // LOGIC LOAD ẢNH FULL (Chất lượng gốc)
   useEffect(() => {
     if (!selectedItem) return;
 
-    let isActive = true; // Cleanup flag
+    let isActive = true;
     let blobUrlToRevoke: string | null = null;
 
     const loadHighQuality = async () => {
-        // 1. Nếu là video, dùng link trực tiếp
+        // 1. Nếu là video: Dùng trực tiếp link
         if (selectedItem.file?.mimeType?.startsWith('video/')) {
              setFullViewSrc(selectedItem.downloadUrl || selectedItem.webUrl);
-             setIsHDLoading(false);
              setIsImgLoading(false);
              return;
         }
 
         // 2. Nếu là ảnh:
-        // B1: Hiển thị ngay Large Thumbnail (Preview nhanh, hơi mờ)
+        // Đặt tạm ảnh thumbnail trong lúc chờ ảnh nét
         const placeholder = selectedItem.largeUrl || selectedItem.mediumUrl || selectedItem.thumbnailUrl;
         setFullViewSrc(placeholder);
         
-        // B2: Tải Blob gốc (HD)
-        if (selectedItem.downloadUrl) {
-            setIsHDLoading(true); 
-            try {
-                // SỬA LỖI QUAN TRỌNG:
-                // Link downloadUrl của OneDrive thường là Pre-signed URL.
-                // TUYỆT ĐỐI KHÔNG gửi header 'Authorization' vào link này, nếu gửi sẽ bị lỗi 403/401.
-                const headers: Record<string, string> = {}; 
-                
-                let res = await fetch(selectedItem.downloadUrl, { headers });
-                
-                // Nếu fetch trực tiếp thất bại (trường hợp hiếm, link hết hạn), mới dùng Token gọi API /content
-                if (!res.ok) {
-                     const token = await getAccessToken();
-                     const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${selectedItem.id}/content`;
-                     res = await fetch(contentUrl, {
-                         headers: { 'Authorization': `Bearer ${token}` }
-                     });
-                }
+        if (!selectedItem.downloadUrl) {
+            setIsImgLoading(false);
+            return;
+        }
 
-                if (res.ok && isActive) {
-                    const blob = await res.blob();
-                    const hdUrl = URL.createObjectURL(blob);
-                    blobUrlToRevoke = hdUrl;
-                    setFullViewSrc(hdUrl); // Swap sang ảnh nét
-                }
-            } catch (e) {
-                console.error("Failed to load HD image", e);
-            } finally {
-                if (isActive) setIsHDLoading(false);
-                if (isActive) setIsImgLoading(false);
+        setIsImgLoading(true);
+        try {
+            // Fetch Blob từ downloadUrl
+            // Chú ý: TUYỆT ĐỐI KHÔNG GỬI HEADER vào link pre-signed của OneDrive
+            const headers: Record<string, string> = {};
+            let res = await fetch(selectedItem.downloadUrl, { headers });
+
+            // Nếu fail (401/403/Link hết hạn), fallback sang API content có Token
+            if (!res.ok) {
+                const token = await getAccessToken();
+                const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${selectedItem.id}/content`;
+                res = await fetch(contentUrl, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
             }
-        } else {
-             setIsImgLoading(false);
+
+            if (res.ok && isActive) {
+                const blob = await res.blob();
+                const hdUrl = URL.createObjectURL(blob);
+                blobUrlToRevoke = hdUrl;
+                setFullViewSrc(hdUrl);
+            }
+        } catch (e) {
+            console.error("Lỗi tải ảnh HD:", e);
+        } finally {
+            if (isActive) setIsImgLoading(false);
         }
     };
 
-    setIsImgLoading(true); 
     loadHighQuality();
 
     return () => {
@@ -203,7 +163,6 @@ export const Album: React.FC<AlbumProps> = ({
 
   const handleOpenItem = (item: CloudItem) => {
     setSelectedItem(item);
-    // Reset states UI
     setIsDownloading(false);
     setIsDeleting(false);
     setIsSharing(false);
@@ -245,24 +204,22 @@ export const Album: React.FC<AlbumProps> = ({
     }
   };
 
+  // LOGIC TẢI VỀ (Sửa lỗi mở tab mới)
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!selectedItem) return;
     
     const targetUrl = selectedItem.downloadUrl || selectedItem.webUrl;
-    if (!targetUrl) { alert("Không tìm thấy đường dẫn tải file."); return; }
+    if (!targetUrl) { alert("Không tìm thấy link tải."); return; }
 
     try {
         setIsDownloading(true);
         
-        // SỬA LỖI DOWNLOAD:
-        // 1. Fetch file dưới dạng Blob (để tránh trình duyệt mở tab mới)
-        // 2. Không gửi Auth Header cho link downloadUrl
-        const headers: Record<string, string> = {}; 
-        
+        // 1. Thử tải không Auth (Pre-signed URL)
+        const headers: Record<string, string> = {};
         let response = await fetch(targetUrl, { headers });
 
-        // Fallback nếu link trực tiếp lỗi
+        // 2. Nếu fail, thử tải có Auth (API Content)
         if (!response.ok) {
              const token = await getAccessToken();
              const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${selectedItem.id}/content`;
@@ -273,10 +230,10 @@ export const Album: React.FC<AlbumProps> = ({
         
         if (!response.ok) throw new Error("Download failed");
         
+        // 3. Tạo Blob và tải
         const blob = await response.blob();
         const blobUrl = window.URL.createObjectURL(blob);
         
-        // Tạo thẻ a ảo để kích hoạt tải xuống
         const link = document.createElement('a');
         link.href = blobUrl;
         link.download = selectedItem.name;
@@ -286,18 +243,25 @@ export const Album: React.FC<AlbumProps> = ({
         document.body.removeChild(link);
         window.URL.revokeObjectURL(blobUrl);
     } catch (error) {
-        console.error("Download error:", error);
-        // Chỉ mở tab mới khi mọi cách đều thất bại
+        console.error("Lỗi download:", error);
+        // Fallback: Mở tab mới nếu mọi cách đều thua
         window.open(targetUrl, '_blank');
     } finally {
         setIsDownloading(false);
     }
   };
 
+  // LOGIC CHIA SẺ
   const handleShareClick = async () => {
       if (!selectedItem || !onShare) return;
       setIsSharing(true);
-      try { await onShare(selectedItem); } finally { setIsSharing(false); }
+      try { 
+          await onShare(selectedItem); 
+      } catch (e: any) {
+          alert("Lỗi chia sẻ: " + e.message);
+      } finally { 
+          setIsSharing(false); 
+      }
   };
 
   const handleQRClick = async () => {
@@ -346,21 +310,21 @@ export const Album: React.FC<AlbumProps> = ({
            <div className="flex-1 flex items-center justify-center relative w-full h-full p-0 sm:p-4 bg-black" onClick={handleClose}>
                {selectedItem.file?.mimeType?.startsWith('image/') ? (
                    <>
-                       {/* Spinner chính khi chưa có ảnh nào */}
-                       {isImgLoading && !fullViewSrc && <Loader2 className="w-10 h-10 text-emerald-500 animate-spin absolute z-0" />}
-                       
+                       {/* Ảnh hiển thị */}
                        <img 
                             src={fullViewSrc} 
                             alt="Full view" 
-                            className={`max-h-full max-w-full object-contain shadow-2xl transition-opacity duration-300 z-10 ${!fullViewSrc ? 'opacity-0' : 'opacity-100'}`}
+                            className={`max-h-full max-w-full object-contain shadow-2xl transition-opacity duration-300 z-10`}
                             onClick={(e) => e.stopPropagation()} 
                        />
 
-                       {/* Indicator đang tải HD */}
-                       {isHDLoading && (
-                           <div className="absolute bottom-10 bg-black/50 text-white px-3 py-1 rounded-full text-xs flex items-center backdrop-blur-md z-20">
-                               <Loader2 className="w-3 h-3 animate-spin mr-2" />
-                               Đang tải chất lượng cao...
+                       {/* Spinner khi đang tải ảnh nét */}
+                       {isImgLoading && (
+                           <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
+                               <div className="bg-black/50 px-4 py-2 rounded-full flex items-center backdrop-blur-md">
+                                   <Loader2 className="w-5 h-5 text-emerald-500 animate-spin mr-2" />
+                                   <span className="text-white text-xs">Đang tải ảnh gốc...</span>
+                               </div>
                            </div>
                        )}
                    </>

@@ -17,7 +17,6 @@ export const getAccessToken = async (): Promise<string> => {
     }
     throw new Error("No token");
   } catch (e) {
-    // console.warn("Failed to get access token, switching to simulation if not handled");
     throw new Error("API_NOT_FOUND");
   }
 };
@@ -26,6 +25,16 @@ const getHeaders = (token: string) => ({
   'Authorization': `Bearer ${token}`,
   'Content-Type': 'application/json'
 });
+
+// --- HELPER: TÍNH TOÁN THƯ MỤC TUẦN ---
+// Logic: T{Tháng}/Tuần_{Tuần trong tháng}
+const getCurrentWeekFolder = () => {
+    const now = new Date();
+    const month = (now.getMonth() + 1).toString().padStart(2, '0');
+    // Tính tuần: Ngày chia 7 làm tròn lên (tối đa tuần 4 hoặc 5)
+    const week = Math.min(5, Math.ceil(now.getDate() / 7)); 
+    return `T${month}/Tuần_${week}`;
+};
 
 // --- USER MANAGEMENT ---
 
@@ -39,7 +48,6 @@ export const fetchUsersFromOneDrive = async (config: AppConfig): Promise<User[]>
     if (res.ok) {
       return await res.json();
     }
-    // If not found, return initial users (first run)
     return INITIAL_USERS;
   } catch (e) {
     console.error("Fetch users failed", e);
@@ -98,6 +106,23 @@ export const saveSystemConfig = async (sysConfig: SystemConfig, config: AppConfi
 
 // --- FILE OPERATIONS ---
 
+// Hàm map dữ liệu từ Graph API sang CloudItem
+const mapGraphItemToCloudItem = (i: any): CloudItem => ({
+    id: i.id,
+    name: i.name,
+    folder: i.folder,
+    file: i.file,
+    webUrl: i.webUrl,
+    lastModifiedDateTime: i.lastModifiedDateTime,
+    size: i.size,
+    // QUAN TRỌNG: Lấy link download trực tiếp (pre-signed)
+    downloadUrl: i['@microsoft.graph.downloadUrl'], 
+    // Ưu tiên ảnh thumbnail medium cho load nhanh, fallback về downloadUrl nếu không có thumb
+    thumbnailUrl: i.thumbnails?.[0]?.medium?.url || i['@microsoft.graph.downloadUrl'],
+    mediumUrl: i.thumbnails?.[0]?.medium?.url,
+    largeUrl: i.thumbnails?.[0]?.large?.url || i['@microsoft.graph.downloadUrl']
+});
+
 export const listPathContents = async (config: AppConfig, path: string, user?: User): Promise<CloudItem[]> => {
   if (config.simulateMode) return [];
   try {
@@ -107,7 +132,7 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
       `:/${config.targetFolder}/${cleanPath}:/children` : 
       `:/${config.targetFolder}:/children`;
     
-    // UPDATED: expand thumbnails
+    // Select các trường cần thiết để tối ưu tốc độ và lấy đúng link ảnh
     const url = `https://graph.microsoft.com/v1.0/me/drive/root${target}?$expand=thumbnails($select=medium,large)&$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,video,image,@microsoft.graph.downloadUrl`;
     
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -116,19 +141,7 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
     const data = await res.json();
     const items = data.value as any[];
     
-    return items.map(i => ({
-      id: i.id,
-      name: i.name,
-      folder: i.folder,
-      file: i.file,
-      webUrl: i.webUrl,
-      lastModifiedDateTime: i.lastModifiedDateTime,
-      size: i.size,
-      downloadUrl: i['@microsoft.graph.downloadUrl'],
-      thumbnailUrl: i.thumbnails?.[0]?.medium?.url || i['@microsoft.graph.downloadUrl'],
-      mediumUrl: i.thumbnails?.[0]?.medium?.url,
-      largeUrl: i.thumbnails?.[0]?.large?.url || i['@microsoft.graph.downloadUrl']
-    }));
+    return items.map(mapGraphItemToCloudItem);
   } catch (e) {
     console.error(e);
     return [];
@@ -136,28 +149,14 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
 };
 
 export const fetchFolderChildren = async (config: AppConfig, folderId: string): Promise<CloudItem[]> => {
-    // Re-use list path logic but with Item ID
     if (config.simulateMode) return [];
     try {
         const token = await getAccessToken();
-        // UPDATED: expand thumbnails
         const url = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children?$expand=thumbnails($select=medium,large)&$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl`;
         const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
         if (!res.ok) return [];
         const data = await res.json();
-        return data.value.map((i: any) => ({
-            id: i.id,
-            name: i.name,
-            folder: i.folder,
-            file: i.file,
-            webUrl: i.webUrl,
-            lastModifiedDateTime: i.lastModifiedDateTime,
-            size: i.size,
-            downloadUrl: i['@microsoft.graph.downloadUrl'],
-            thumbnailUrl: i.thumbnails?.[0]?.medium?.url || i['@microsoft.graph.downloadUrl'],
-            mediumUrl: i.thumbnails?.[0]?.medium?.url,
-            largeUrl: i.thumbnails?.[0]?.large?.url || i['@microsoft.graph.downloadUrl']
-        }));
+        return data.value.map(mapGraphItemToCloudItem);
     } catch(e) { return []; }
 };
 
@@ -169,13 +168,18 @@ export const uploadToOneDrive = async (file: File, config: AppConfig, user: User
   
   try {
     const token = await getAccessToken();
-    const folderPath = destination === 'personal' ? 
-        `${config.targetFolder}/${user.username}/Uploads` :
-        `${config.targetFolder}/Tu_lieu_chung_Cho_duyet/${user.username}`;
+    let folderPath = '';
+
+    if (destination === 'personal') {
+        // Cấu trúc: .../Username/T{Tháng}/Tuần_{Tuần}
+        const timePath = getCurrentWeekFolder();
+        folderPath = `${config.targetFolder}/${user.username}/${timePath}`;
+    } else {
+        folderPath = `${config.targetFolder}/Tu_lieu_chung_Cho_duyet/${user.username}`;
+    }
         
     const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${folderPath}/${file.name}:/content`;
     
-    // For small files < 4MB, use simple PUT. For larger, should use createUploadSession (simplified here)
     const res = await fetch(url, {
         method: 'PUT',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': file.type },
@@ -222,10 +226,8 @@ export const renameOneDriveItem = async (config: AppConfig, itemId: string, newN
 
 export const moveOneDriveItem = async (config: AppConfig, itemId: string, destPath: string): Promise<boolean> => {
      if (config.simulateMode) return true;
-     // Simplified: In Graph API, move is PATCH with parentReference. 
-     // We need to find the parent folder ID first, which is complex.
-     // For this fix, we will assume success for now or implement full logic later.
-     // To strictly implemented, we need the Destination Folder ID.
+     // Cần tìm Parent ID của folder đích trước, logic này khá phức tạp nếu làm chuẩn.
+     // Ở đây tạm thời return true để UI không lỗi.
      return true; 
 };
 
@@ -234,73 +236,127 @@ export const createShareLink = async (config: AppConfig, itemId: string): Promis
     try {
         const token = await getAccessToken();
         const url = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/createLink`;
-        const res = await fetch(url, {
+        
+        // 1. Cố gắng tạo link 'anonymous' (Ai cũng xem được, không cần đăng nhập)
+        let body = { type: 'view', scope: 'anonymous' };
+        
+        let res = await fetch(url, {
             method: 'POST',
             headers: getHeaders(token),
-            body: JSON.stringify({ type: 'view', scope: 'anonymous' })
+            body: JSON.stringify(body)
         });
+
+        // 2. Nếu thất bại (Lỗi 400/403 - Do chính sách công ty chặn Anonymous)
+        if (!res.ok) {
+             const errorData = await res.json();
+             console.warn("Anonymous link failed", errorData);
+             
+             // Thử lại với scope organization (Chỉ nội bộ xem được)
+             // Hoặc throw error để UI báo người dùng biết
+             throw new Error("Tổ chức không cho phép chia sẻ công khai (Anonymous). Chỉ có thể chia sẻ nội bộ.");
+        }
+
         const data = await res.json();
         return data.link.webUrl;
-    } catch (e) { throw new Error("Could not create link"); }
+    } catch (e: any) { 
+        throw e; 
+    }
 };
 
 // --- HISTORY & STATS ---
 
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
     if (config.simulateMode) return [];
-    // Mock implementation for demo - usually requires search API
-    return [];
+    
+    // Logic: Lấy danh sách file trong thư mục của TUẦN HIỆN TẠI
+    try {
+        const timePath = getCurrentWeekFolder();
+        const path = `${user.username}/${timePath}`;
+        
+        const items = await listPathContents(config, path, user);
+        
+        // Map sang PhotoRecord
+        return items.filter(i => i.file).map(i => ({
+            id: i.id,
+            fileName: i.name,
+            file: undefined,
+            // Ưu tiên downloadUrl để preview (nếu không có thumb)
+            previewUrl: i.mediumUrl || i.downloadUrl, 
+            uploadedUrl: i.webUrl,
+            status: UploadStatus.SUCCESS,
+            timestamp: new Date(i.lastModifiedDateTime),
+            size: i.size,
+            mimeType: i.file?.mimeType
+        }));
+
+    } catch (e) {
+        console.error("Error fetching recent files:", e);
+        return [];
+    }
 };
 
 export const fetchUserDeletedItems = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
     if (config.simulateMode) return [];
-    return [];
+    // API Recycle Bin
+    try {
+        const token = await getAccessToken();
+        const url = `https://graph.microsoft.com/v1.0/me/drive/root/recycleBin`;
+        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+        
+        if (!res.ok) return [];
+        
+        const data = await res.json();
+        const items = data.value || [];
+
+        return items.map((i: any) => ({
+            id: i.id,
+            fileName: i.name,
+            file: undefined,
+            previewUrl: '', 
+            status: UploadStatus.SUCCESS,
+            timestamp: new Date(i.lastModifiedDateTime),
+            deletedDate: i.deleted?.time ? new Date(i.deleted.time) : new Date(),
+            size: i.size
+        }));
+
+    } catch (e) {
+        return [];
+    }
 };
 
 export const fetchAllMedia = async (config: AppConfig, user: User): Promise<CloudItem[]> => {
-     // Search for all images/videos
      if (config.simulateMode) return [];
      try {
          const token = await getAccessToken();
-         // UPDATED: expand thumbnails in search if supported, otherwise select fallback
-         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='')?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl`;
+         // Tìm tất cả ảnh/video trong folder gốc của app
+         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='')?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl`;
          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
          if (!res.ok) return [];
          const data = await res.json();
-         // Note: Search endpoint might not reliably support expanding thumbnails on the fly for all items.
-         // We rely on downloadUrl here, or we'd need to batch fetch thumbnails.
-         return data.value.filter((i:any) => i.file).map((i:any) => ({
-             id: i.id,
-             name: i.name,
-             file: i.file,
-             webUrl: i.webUrl,
-             lastModifiedDateTime: i.lastModifiedDateTime,
-             size: i.size,
-             downloadUrl: i['@microsoft.graph.downloadUrl'],
-             thumbnailUrl: i['@microsoft.graph.downloadUrl'], // Fallback for search
-             largeUrl: i['@microsoft.graph.downloadUrl']
-         }));
+         
+         // Sử dụng hàm map chung để đảm bảo dữ liệu nhất quán
+         return data.value.filter((i:any) => i.file).map(mapGraphItemToCloudItem);
      } catch (e) { return []; }
 };
 
 export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> => {
-    if (config.simulateMode) return { totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 };
-    // Simplified stats
+    // Placeholder - Cần API Reports của Graph (Khá phức tạp)
+    // Tạm thời trả về 0 để UI không lỗi
     return { totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 };
 };
 
 export const aggregateUserStats = (media: CloudItem[], users: User[]): User[] => {
     return users.map(u => {
-        // Logic to count files per user based on file naming or folder path if available in simulation
+        const userFiles = media.filter(m => m.name.includes(u.username) || (u.username === 'admin')); 
+        const totalSize = userFiles.reduce((acc, curr) => acc + curr.size, 0);
         return {
             ...u,
-            usageStats: { fileCount: 0, totalSize: 0 }
+            usageStats: { fileCount: userFiles.length, totalSize: totalSize }
         };
     });
 };
 
-// --- QR LOGS ---
-
+// --- QR LOGS & VISITORS ---
 export const fetchQRCodeLogs = async (config: AppConfig): Promise<QRCodeLog[]> => {
   if (config.simulateMode) return [];
   try {
@@ -348,8 +404,6 @@ export const deleteQRCodeLog = async (config: AppConfig, logId: string): Promise
   } catch (error) { return false; }
 };
 
-// --- VISITOR MANAGEMENT ---
-
 export const fetchVisitors = async (config: AppConfig, unit: string, monthStr: string): Promise<VisitorRecord[]> => {
     if (config.simulateMode) return [];
     try {
@@ -364,7 +418,6 @@ export const fetchVisitors = async (config: AppConfig, unit: string, monthStr: s
 export const saveVisitor = async (config: AppConfig, unitCode: string, record: VisitorRecord): Promise<boolean> => {
     if (config.simulateMode) return true;
     try {
-        // Calculate Month String from record date
         const date = new Date(record.visitDate);
         const monthStr = `${date.getFullYear()}_${(date.getMonth() + 1).toString().padStart(2, '0')}`;
         
@@ -385,9 +438,10 @@ export const saveVisitor = async (config: AppConfig, unitCode: string, record: V
 
 export const updateVisitorStatus = async (config: AppConfig, unitCode: string, recordId: string, status: 'pending' | 'approved' | 'completed'): Promise<boolean> => {
      if (config.simulateMode) return true;
-     // Finding the record requires knowing the month, which might be tricky if not passed.
-     // For now, we assume current month or try to deduce. 
-     // Ideally, the UI passes the month. 
-     // This is a simplified implementation.
-     return true;
+     try {
+        // Cần fetch lại file JSON của tháng đó, update record, rồi save lại.
+        // Logic này tương tự saveVisitor nhưng thay vì push thì map.
+        // Tạm thời return true.
+        return true;
+     } catch(e) { return false; }
 };
