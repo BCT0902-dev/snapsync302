@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   fetchSystemConfig, saveSystemConfig, DEFAULT_SYSTEM_CONFIG, fetchUserRecentFiles, fetchUserDeletedItems,
@@ -1769,7 +1768,7 @@ export default function App() {
         {currentView === 'visitor-manager' && !isGuest && (
             <VisitorManager 
                 user={user}
-                usersList={usersList} // Thêm prop này để fix lỗi dropdown
+                usersList={usersList}
                 config={config}
                 themeColor={systemConfig.themeColor}
             />

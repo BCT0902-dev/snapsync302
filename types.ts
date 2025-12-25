@@ -60,9 +60,7 @@ export interface CloudItem {
   webUrl: string;
   lastModifiedDateTime: string;
   size: number;
-  thumbnailUrl?: string; // Link ảnh thumb mặc định (thường là medium)
-  mediumUrl?: string;    // Thumb kích thước trung bình (cho Grid)
-  largeUrl?: string;     // Thumb kích thước lớn (cho Full View preview)
+  thumbnailUrl?: string; // Link ảnh thumb
   downloadUrl?: string; // Link tải trực tiếp (@microsoft.graph.downloadUrl)
   views?: number;
   downloads?: number;
