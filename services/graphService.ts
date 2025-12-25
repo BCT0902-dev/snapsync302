@@ -1,3 +1,4 @@
+
 // BCT0902
 import { AppConfig, User, SystemConfig, CloudItem, PhotoRecord, UploadStatus, SystemStats, QRCodeLog, VisitorRecord } from '../types';
 import { INITIAL_USERS } from './mockAuth';
@@ -268,26 +269,49 @@ export const createShareLink = async (config: AppConfig, itemId: string): Promis
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
     if (config.simulateMode) return [];
     
-    // CẬP NHẬT: Search toàn bộ file (top 999) thay vì 50 để hiển thị toàn bộ lịch sử
     try {
         const token = await getAccessToken();
         const userRootPath = `${config.targetFolder}/${user.username}`;
         
-        // Search API: Tìm tất cả item là file trong folder của user
-        const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}:/search(q='')?select=id,name,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
+        // --- 1. TÌM KIẾM TOÀN BỘ (HISTORY) ---
+        // Sử dụng q='*' để đảm bảo tìm thấy mọi loại file
+        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}:/search(q='*')?select=id,name,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
         
-        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-        
-        if (!res.ok) {
-            // Nếu folder chưa có thì trả về rỗng
-            return [];
-        }
-        
-        const data = await res.json();
-        const items = data.value || [];
+        // --- 2. QUÉT TRỰC TIẾP THƯ MỤC TUẦN NÀY (REAL-TIME RECENT) ---
+        // Để khắc phục độ trễ Indexing của Search API, ta quét thẳng vào folder tuần hiện tại
+        const currentWeekFolder = getCurrentWeekFolder();
+        const directUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}/${currentWeekFolder}:/children?$expand=thumbnails($select=medium,large)&$select=id,name,file,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl`;
 
-        return items
-            .filter((i: any) => i.file) // Chỉ lấy file (bất kể định dạng)
+        // Chạy song song
+        const [searchRes, directRes] = await Promise.allSettled([
+            fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } }),
+            fetch(directUrl, { headers: { 'Authorization': `Bearer ${token}` } })
+        ]);
+
+        let allItems: any[] = [];
+
+        // Xử lý kết quả Search
+        if (searchRes.status === 'fulfilled' && searchRes.value.ok) {
+            const data = await searchRes.value.json();
+            if (data.value) allItems.push(...data.value);
+        }
+
+        // Xử lý kết quả Direct
+        if (directRes.status === 'fulfilled' && directRes.value.ok) {
+            const data = await directRes.value.json();
+            if (data.value) allItems.push(...data.value);
+        }
+
+        // Loại bỏ trùng lặp (Dựa vào ID)
+        const uniqueItemsMap = new Map();
+        allItems.forEach(item => {
+            if (item.file) { // Chỉ lấy file
+                uniqueItemsMap.set(item.id, item);
+            }
+        });
+        const uniqueItems = Array.from(uniqueItemsMap.values());
+
+        return uniqueItems
             .sort((a: any, b: any) => new Date(b.lastModifiedDateTime).getTime() - new Date(a.lastModifiedDateTime).getTime())
             .map((i: any) => ({
                 id: i.id,
@@ -340,13 +364,13 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
      if (config.simulateMode) return [];
      try {
          const token = await getAccessToken();
-         // Tìm tất cả FILE trong folder gốc của app (không phân biệt định dạng)
-         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='')?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
+         // CẬP NHẬT: search(q='*') để lấy TẤT CẢ các loại file, không bị sót
+         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='*')?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
          if (!res.ok) return [];
          const data = await res.json();
          
-         // Sử dụng hàm map chung
+         // Lọc lấy file
          return data.value.filter((i:any) => i.file).map(mapGraphItemToCloudItem);
      } catch (e) { return []; }
 };
@@ -356,20 +380,19 @@ export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> 
     try {
         const token = await getAccessToken();
         
-        // CẬP NHẬT: Search toàn bộ file trong folder App và tính tổng dung lượng từ các file tìm được
-        // Lưu ý: Chúng ta dùng search(q='') để tìm đệ quy mọi file trong folder SnapSync302
-        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='')?select=id,file,size&top=999`;
+        // CẬP NHẬT: Search toàn bộ file (q='*') để đếm và tính dung lượng CHÍNH XÁC
+        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='*')?select=id,file,size&top=999`;
         const searchRes = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
         
         let totalFiles = 0;
-        let totalStorage = 0; // Tính tổng dung lượng thực tế của file
+        let totalStorage = 0;
 
         if (searchRes.ok) {
             const searchData = await searchRes.json();
-            // Lọc item là file (để loại bỏ folder)
+            // Lọc item là file (bỏ qua folder)
             const files = searchData.value ? searchData.value.filter((i: any) => i.file) : [];
             totalFiles = files.length;
-            // Cộng dồn size
+            // Cộng dồn size của từng file thực tế
             totalStorage = files.reduce((acc: number, curr: any) => acc + (curr.size || 0), 0);
         }
 
