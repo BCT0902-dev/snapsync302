@@ -1,4 +1,3 @@
-
 // BCT0902
 import { AppConfig, User, SystemConfig, CloudItem, PhotoRecord, UploadStatus, SystemStats, QRCodeLog, VisitorRecord } from '../types';
 import { INITIAL_USERS } from './mockAuth';
@@ -269,25 +268,22 @@ export const createShareLink = async (config: AppConfig, itemId: string): Promis
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
     if (config.simulateMode) return [];
     
-    // CẬP NHẬT: Thay vì tìm trong folder tuần, ta SEARCH trong toàn bộ folder của user
+    // CẬP NHẬT: Search toàn bộ file (top 999) thay vì 50 để hiển thị toàn bộ lịch sử
     try {
         const token = await getAccessToken();
         const userRootPath = `${config.targetFolder}/${user.username}`;
         
-        // Search API: Tìm tất cả item, sắp xếp theo thời gian giảm dần, lấy top 50
-        const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}:/search(q='')?select=id,name,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=50`;
+        const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}:/search(q='')?select=id,name,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
         
         const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
         
         if (!res.ok) {
-            // Fallback: Nếu folder user chưa tồn tại, trả về rỗng thay vì lỗi
             return [];
         }
         
         const data = await res.json();
         const items = data.value || [];
 
-        // Map sang PhotoRecord và sắp xếp lại client-side để chắc chắn
         return items
             .filter((i: any) => i.file) // Chỉ lấy file
             .sort((a: any, b: any) => new Date(b.lastModifiedDateTime).getTime() - new Date(a.lastModifiedDateTime).getTime())
@@ -295,7 +291,6 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
                 id: i.id,
                 fileName: i.name,
                 file: undefined,
-                // Ưu tiên thumbnail medium
                 previewUrl: i.thumbnails?.[0]?.medium?.url || i['@microsoft.graph.downloadUrl'], 
                 uploadedUrl: i.webUrl,
                 status: UploadStatus.SUCCESS,
@@ -343,13 +338,13 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
      if (config.simulateMode) return [];
      try {
          const token = await getAccessToken();
-         // Tìm tất cả ảnh/video trong folder gốc của app
-         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='')?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl`;
+         // Tìm tất cả FILE trong folder gốc của app (không phân biệt định dạng)
+         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='')?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
          if (!res.ok) return [];
          const data = await res.json();
          
-         // Sử dụng hàm map chung để đảm bảo dữ liệu nhất quán
+         // Lọc các item là file
          return data.value.filter((i:any) => i.file).map(mapGraphItemToCloudItem);
      } catch (e) { return []; }
 };
@@ -359,30 +354,19 @@ export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> 
     try {
         const token = await getAccessToken();
         
-        // 1. Lấy thông tin dung lượng từ Drive Quota (Tổng dung lượng OneDrive)
-        const quotaUrl = `https://graph.microsoft.com/v1.0/me/drive`;
-        const quotaRes = await fetch(quotaUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-        
-        let totalStorage = 0;
-        if (quotaRes.ok) {
-            const quotaData = await quotaRes.json();
-            totalStorage = quotaData.quota?.used || 0;
-        }
-
-        // 2. Tìm kiếm để đếm số lượng file trong folder App
-        // Lưu ý: Search đệ quy folder app
+        // CẬP NHẬT: Search toàn bộ file trong folder App và tính tổng dung lượng từ các file tìm được
         const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='')?select=id,file,size&top=999`;
         const searchRes = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
         
         let totalFiles = 0;
+        let totalStorage = 0; // Tính tổng dung lượng thực tế của file
+
         if (searchRes.ok) {
             const searchData = await searchRes.json();
-            // Lọc item là file
+            // Lọc item là file và tính tổng
             const files = searchData.value ? searchData.value.filter((i: any) => i.file) : [];
             totalFiles = files.length;
-            
-            // Tính lại storage chỉ của App folder (chính xác hơn là dùng quota toàn bộ OneDrive)
-            // totalStorage = files.reduce((acc: number, curr: any) => acc + (curr.size || 0), 0);
+            totalStorage = files.reduce((acc: number, curr: any) => acc + (curr.size || 0), 0);
         }
 
         return { totalUsers: 0, activeUsers: 0, totalFiles, totalStorage };

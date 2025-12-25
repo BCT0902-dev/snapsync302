@@ -1,4 +1,3 @@
-
 // BCT0902
 import React, { useState, useEffect, useRef } from 'react';
 import { 
@@ -273,7 +272,7 @@ export default function App() {
   const loadRecentPhotos = async (currentUser: User) => {
     setIsHistoryLoading(true);
     try {
-      // Load Uploads (2 Months)
+      // Load Uploads (Fetched 999 items)
       const uploads = await fetchUserRecentFiles(config, currentUser);
       setPhotos(uploads);
       
@@ -702,7 +701,7 @@ export default function App() {
      // Cập nhật Breadcrumb: Home > Tất cả
      setGalleryBreadcrumbs([
          {name: 'Thư viện', path: ''}, 
-         {name: 'Tất cả ảnh/video', path: 'ALL_MEDIA_SPECIAL_KEY'}
+         {name: 'Tất cả file', path: 'ALL_MEDIA_SPECIAL_KEY'}
      ]);
      try {
          const items = await fetchAllMedia(config, user);
@@ -1219,11 +1218,13 @@ export default function App() {
   });
 
   // --- FILTERS ---
-  // Lọc cho trang Upload (Camera): 7 ngày gần nhất
-  const getWeeklyPhotos = () => {
-    const oneWeekAgo = new Date();
-    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-    return photos.filter(p => p.timestamp >= oneWeekAgo);
+  // Lọc cho trang Upload (Camera): Trong tháng hiện tại
+  const getMonthlyPhotos = () => {
+    const now = new Date();
+    return photos.filter(p => 
+        p.timestamp.getMonth() === now.getMonth() && 
+        p.timestamp.getFullYear() === now.getFullYear()
+    );
   };
 
   // Lọc cho trang History
@@ -1231,7 +1232,7 @@ export default function App() {
     if (historyTab === 'deleted') {
         return deletedPhotos;
     }
-    return photos; // 2 Months Uploads
+    return photos; // Now contains all uploads (up to 999 items)
   };
   
   // -- Check if current gallery view is Pending Folder --
@@ -1451,20 +1452,20 @@ export default function App() {
             <div className="flex justify-between items-center mt-8 mb-4 border-b border-slate-200 pb-2">
               <h3 className="font-bold text-slate-700 flex items-center">
                 <History className="w-4 h-4 mr-2 text-slate-400" />
-                Hoạt động gần đây (Tuần)
+                Hoạt động gần đây (Tháng {new Date().getMonth() + 1})
               </h3>
               <button onClick={() => setCurrentView('history')} className="text-xs font-bold hover:underline" style={textThemeStyle}>Xem tất cả</button>
             </div>
             {isHistoryLoading ? (
               <div className="text-center py-6 text-slate-400"><Loader2 className="w-6 h-6 mx-auto animate-spin mb-1" /> Đang đồng bộ...</div>
-            ) : getWeeklyPhotos().length === 0 ? (
+            ) : getMonthlyPhotos().length === 0 ? (
               <div className="text-center py-12 text-slate-400 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
                 <ImageIcon className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                <p>Chưa có dữ liệu trong tuần.</p>
+                <p>Chưa có dữ liệu trong tháng.</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {getWeeklyPhotos().slice(0, 5).map((photo) => (
+                {getMonthlyPhotos().slice(0, 5).map((photo) => (
                   <div key={photo.id} className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center flex-wrap">
                     <PhotoPreview record={photo} />
                     <div className="ml-4 flex-1 min-w-0">
@@ -1508,7 +1509,7 @@ export default function App() {
                     onClick={() => setHistoryTab('uploads')}
                     className={`flex-1 py-2 rounded-md text-xs font-bold transition-all ${historyTab === 'uploads' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}
                  >
-                     Đã tải lên (2 tháng)
+                     Đã tải lên
                  </button>
                  <button 
                     onClick={() => setHistoryTab('deleted')}
