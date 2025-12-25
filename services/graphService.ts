@@ -1,4 +1,4 @@
-
+// BCT0902
 import { AppConfig, User, SystemConfig, CloudItem, PhotoRecord, UploadStatus, SystemStats, QRCodeLog, VisitorRecord } from '../types';
 import { INITIAL_USERS } from './mockAuth';
 

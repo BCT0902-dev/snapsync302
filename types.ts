@@ -1,4 +1,4 @@
-
+// BCT0902
 export interface User {
   id: string;
   username: string;

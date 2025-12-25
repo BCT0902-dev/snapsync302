@@ -1,4 +1,4 @@
-
+// BCT0902
 import React, { useState, useEffect } from 'react';
 import { User, AppConfig, VisitorRecord } from '../types';
 import { Button } from './Button';

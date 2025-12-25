@@ -1,4 +1,4 @@
-
+<!-- BCT0902 -->
 # SnapSync 302 - Hệ thống Quản lý Hình ảnh Quân nhân
 
 **Developed by Bùi Công Tới**

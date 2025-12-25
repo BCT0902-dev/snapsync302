@@ -1,4 +1,4 @@
-
+// BCT0902
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { User, AppConfig, VisitorRecord } from '../types';
 import { fetchVisitors, updateVisitorStatus } from '../services/graphService';

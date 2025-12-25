@@ -1,4 +1,4 @@
-
+// BCT0902
 import { User } from '../types';
 
 // Simple obfuscation to hide the plain text password in the source code
