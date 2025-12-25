@@ -213,8 +213,12 @@ export const uploadToOneDrive = async (file: File, config: AppConfig, user: User
         // Tư liệu chung chờ duyệt: Vẫn giữ username để biết ai gửi để admin duyệt
         folderPath = `${config.targetFolder}/Tu_lieu_chung_Cho_duyet/${user.username}`;
     }
+    
+    // ĐỔI TÊN FILE: Thêm username_ vào trước tên file để định danh chủ sở hữu
+    // Việc này giúp lọc lịch sử chính xác cho từng user
+    const finalFileName = `${user.username}_${file.name}`;
         
-    const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${folderPath}/${file.name}:/content`;
+    const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${folderPath}/${finalFileName}:/content`;
     
     const res = await fetch(url, {
         method: 'PUT',
@@ -404,8 +408,6 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
         let allFiles: any[] = [];
 
         // ADMIN: Vẫn dùng Search cho nhanh (Root context) hoặc Crawl nếu Search lỗi. 
-        // Để đảm bảo nhất, ta dùng Crawl luôn nếu Search không tin cậy, nhưng với Admin Search thường OK.
-        // Tuy nhiên để đồng nhất, ta dùng Crawl targeted cho Admin cũng được, nhưng Admin cần xem ALL.
         if (user.role === 'admin') {
              const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?${selectFields}&top=200`;
              const res = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -414,21 +416,31 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
                  allFiles = data.value || [];
              }
         } else {
-             // USER: CRAWL DIRECTLY (Fix lỗi không hiện History)
+             // USER: CRAWL DIRECTLY
              // Quét 2 nơi: Thư mục Đơn vị và Thư mục Chờ duyệt của họ
              const leafUnit = getLeafUnitName(user.unit);
              const urlsToCrawl = [
                  `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${leafUnit}:/children?${selectFields}`,
                  `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Tu_lieu_chung_Cho_duyet/${user.username}:/children?${selectFields}`,
-                 `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Tu_lieu_chung:/children?${selectFields}` // Thêm Common nếu muốn hiện trong history
+                 `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Tu_lieu_chung:/children?${selectFields}` 
              ];
 
              const promises = urlsToCrawl.map(u => crawlFolder(token, u, selectFields));
              const results = await Promise.all(promises);
              allFiles = results.flat();
+
+             // LỌC NGHIÊM NGẶT: Chỉ hiển thị file do chính user đó tải lên
+             // Dựa vào quy tắc đặt tên mới: username_filename
+             // Hoặc file nằm trong folder chờ duyệt của chính họ
+             allFiles = allFiles.filter(i => {
+                 const name = i.name || "";
+                 const isOwnPrefix = name.startsWith(`${user.username}_`);
+                 const isOwnPending = i.parentReference?.path?.includes(`/Tu_lieu_chung_Cho_duyet/${user.username}`);
+                 return isOwnPrefix || isOwnPending;
+             });
         }
 
-        // Deduplicate & Filter
+        // Deduplicate
         const uniqueMap = new Map();
         allFiles.forEach(i => {
              if(i.file) uniqueMap.set(i.id, i);
@@ -467,7 +479,16 @@ export const fetchUserDeletedItems = async (config: AppConfig, user: User): Prom
         const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
         if (!res.ok) return [];
         const data = await res.json();
-        const items = data.value || [];
+        let items = data.value || [];
+
+        // LỌC NGHIÊM NGẶT Recycle Bin
+        if (user.role !== 'admin') {
+            items = items.filter((i: any) => {
+                 const name = i.name || "";
+                 return name.startsWith(`${user.username}_`);
+            });
+        }
+
         return items.map((i: any) => ({
             id: i.id,
             fileName: i.name,
