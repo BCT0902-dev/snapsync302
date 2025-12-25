@@ -23,7 +23,7 @@ import {
   Share2, Folder, FolderOpen, Link as LinkIcon, ChevronLeft, ChevronRight, Download,
   AlertTriangle, Shield, Palette, Save, UserPlus, Check, UploadCloud, Library, Home,
   BarChart3, Grid, Pencil, Eye, EyeOff, Lock, CheckSquare, Square, Calculator, Clock, Globe,
-  FolderLock, ChevronDown, QrCode, ExternalLink, HeartHandshake
+  FolderLock, ChevronDown, QrCode, ExternalLink, HeartHandshake, AlertCircle
 } from 'lucide-react';
 
 const APP_VERSION_TEXT = "CNTT/f302 - Version 1.00";
@@ -62,6 +62,117 @@ interface ExtendedCloudItem extends CloudItem {
   isLoadingChildren?: boolean;
   hasLoadedChildren?: boolean;
 }
+
+// --- NEW COMPONENT: Shared File Viewer (Public View via App Proxy) ---
+const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConfig: SystemConfig }) => {
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [fileData, setFileData] = useState<{name: string, url: string, mimeType: string, size: number} | null>(null);
+
+    useEffect(() => {
+        const loadFile = async () => {
+            try {
+                const token = await getAccessToken();
+                
+                // 1. Get Metadata
+                const metaUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}?select=id,name,file,size`;
+                const metaRes = await fetch(metaUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+                if (!metaRes.ok) throw new Error("File không tồn tại hoặc đã bị xóa.");
+                const meta = await metaRes.json();
+
+                // 2. Get Content
+                const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/content`;
+                const contentRes = await fetch(contentUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+                if (!contentRes.ok) throw new Error("Không thể tải nội dung file.");
+                
+                const blob = await contentRes.json().catch(() => contentRes.blob()); // Handle specific error json or blob
+                if (contentRes.headers.get("content-type")?.includes("application/json")) {
+                   // If Graph returns JSON error despite 200/400 check
+                   throw new Error("Lỗi tải file từ hệ thống.");
+                }
+
+                const url = URL.createObjectURL(blob as Blob);
+                setFileData({
+                    name: meta.name,
+                    url: url,
+                    mimeType: meta.file?.mimeType || 'application/octet-stream',
+                    size: meta.size
+                });
+            } catch (e: any) {
+                setError(e.message || "Có lỗi xảy ra.");
+            } finally {
+                setLoading(false);
+            }
+        };
+        loadFile();
+    }, [fileId]);
+
+    if (loading) return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-4">
+            <Loader2 className="w-10 h-10 text-emerald-600 animate-spin mb-4" />
+            <p className="text-slate-500 font-medium animate-pulse">Đang tải dữ liệu an toàn...</p>
+        </div>
+    );
+
+    if (error) return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
+            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
+                <AlertTriangle className="w-8 h-8 text-red-500" />
+            </div>
+            <h3 className="text-xl font-bold text-slate-800 mb-2">Không thể truy cập</h3>
+            <p className="text-slate-500 mb-6">{error}</p>
+            <a href="/" className="px-6 py-3 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300">
+                Về trang chủ
+            </a>
+        </div>
+    );
+
+    return (
+        <div className="min-h-screen bg-black flex flex-col">
+            {/* Header */}
+            <div className="bg-gradient-to-b from-black/80 to-transparent p-4 flex justify-between items-start absolute top-0 w-full z-20">
+                <div className="text-white">
+                    <h1 className="font-bold text-lg truncate pr-4 drop-shadow-md">{fileData?.name}</h1>
+                    <p className="text-xs text-white/80 opacity-80">
+                        {systemConfig.appName} • {fileData ? (fileData.size / 1024 / 1024).toFixed(2) : 0} MB
+                    </p>
+                </div>
+                <a 
+                    href={fileData?.url} 
+                    download={fileData?.name}
+                    className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all shadow-lg"
+                >
+                    <Download className="w-6 h-6" />
+                </a>
+            </div>
+
+            {/* Viewer */}
+            <div className="flex-1 flex items-center justify-center p-2 sm:p-6 overflow-hidden relative">
+                {fileData?.mimeType.startsWith('image/') ? (
+                    <img src={fileData.url} alt="Content" className="max-w-full max-h-full object-contain shadow-2xl rounded-sm" />
+                ) : fileData?.mimeType.startsWith('video/') ? (
+                    <video src={fileData.url} controls autoPlay className="max-w-full max-h-full shadow-2xl rounded-sm" />
+                ) : (
+                    <div className="bg-white p-8 rounded-2xl flex flex-col items-center text-center">
+                        <FileIcon className="w-16 h-16 text-slate-400 mb-4" />
+                        <p className="font-bold text-slate-700 mb-4">File này không hỗ trợ xem trước</p>
+                        <a 
+                            href={fileData?.url} 
+                            download={fileData?.name}
+                            className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold shadow-lg hover:bg-emerald-700"
+                        >
+                            Tải về máy
+                        </a>
+                    </div>
+                )}
+            </div>
+            
+             <div className="absolute bottom-6 left-0 w-full text-center z-20 pointer-events-none">
+                 <p className="text-white/30 text-[10px] uppercase tracking-widest">Powered by {systemConfig.appName}</p>
+             </div>
+        </div>
+    );
+};
 
 export default function App() {
   // --- STATE ---
@@ -148,6 +259,7 @@ export default function App() {
   
   // Guest View State (Parsed from URL)
   const [guestViewParams, setGuestViewParams] = useState<{unit: string, month: string} | null>(null);
+  const [sharedFileId, setSharedFileId] = useState<string | null>(null); // NEW: View specific file via QR
   
   // Action State
   const [isRenaming, setIsRenaming] = useState<string | null>(null);
@@ -168,25 +280,38 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const view = params.get('view');
+    
+    // 1. Guest Check-in QR
     if (view === 'guest-visit') {
         const unit = params.get('unit');
         const month = params.get('month');
         if (unit && month) {
             setGuestViewParams({ unit, month });
-            setShowSplash(false); // Skip splash for guest
+            setShowSplash(false);
             return;
         }
     }
+    
+    // 2. Shared File QR (NEW LOGIC to bypass anonymous throttling)
+    if (view === 'share') {
+        const id = params.get('id');
+        if (id) {
+            setSharedFileId(id);
+            setShowSplash(false);
+            return;
+        }
+    }
+
   }, []);
   
   // Splash Screen Effect (only if not guest view)
   useEffect(() => {
-    if (guestViewParams) return; 
+    if (guestViewParams || sharedFileId) return; 
     const timer = setTimeout(() => {
       setShowSplash(false);
     }, 1500); // 1.5 giây để load
     return () => clearTimeout(timer);
-  }, [guestViewParams]);
+  }, [guestViewParams, sharedFileId]);
 
   useEffect(() => {
     const initData = async () => {
@@ -403,6 +528,7 @@ export default function App() {
     setPhotos([]); // Clear local photos
     setShowDisclaimer(false);
     setGuestViewParams(null); // Clear guest params if any
+    setSharedFileId(null); // Clear shared file param
     setIsViewingAll(false); // Reset View All mode
     // Remove URL params
     window.history.replaceState(null, '', window.location.pathname);
@@ -883,22 +1009,24 @@ export default function App() {
       if (!user) return;
       setIsGeneratingQR(true);
       try {
-          // 1. Tạo link share ẩn danh (Public)
-          const link = await createShareLink(config, item.id);
+          // === QUAN TRỌNG: SỬ DỤNG APP PROXY LINK THAY VÌ DIRECT LINK ===
+          // Để tránh lỗi "Too many anonymous requests" từ Microsoft,
+          // chúng ta tạo link trỏ về App, App sẽ dùng Token xác thực để tải file.
+          const proxyLink = `${window.location.origin}?view=share&id=${item.id}`;
           
-          // 2. Lưu log cho Admin
+          // 2. Lưu log cho Admin (Lưu proxy link để admin cũng mở qua App)
           const logData: QRCodeLog = {
               id: Date.now().toString(),
               fileId: item.id,
               fileName: item.name,
               createdBy: user.displayName,
               createdDate: new Date().toISOString(),
-              link: link
+              link: proxyLink // Save the proxy link!
           };
           saveQRCodeLog(logData, config); // Fire and forget save
           
           // 3. Show Modal
-          setQrModalData({ name: item.name, link: link });
+          setQrModalData({ name: item.name, link: proxyLink });
       } catch (e: any) {
           alert("Không thể tạo mã QR: " + e.message);
       } finally {
@@ -1289,7 +1417,14 @@ export default function App() {
       );
   }
 
-  // 3. RENDER LOGIN SCREEN
+  // 3. RENDER SHARED FILE VIEW (New logic via App Proxy)
+  if (sharedFileId) {
+      return (
+          <SharedFileViewer fileId={sharedFileId} systemConfig={systemConfig} />
+      );
+  }
+
+  // 4. RENDER LOGIN SCREEN
   if (!user) {
     // ... Login UI (Giữ nguyên)
     return (
