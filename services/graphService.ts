@@ -111,7 +111,7 @@ const mapGraphItemToCloudItem = (i: any): CloudItem => ({
     id: i.id,
     name: i.name,
     folder: i.folder,
-    file: i.file,
+    file: i.file, // Giữ nguyên object file để lấy mimeType
     webUrl: i.webUrl,
     lastModifiedDateTime: i.lastModifiedDateTime,
     size: i.size,
@@ -273,11 +273,13 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
         const token = await getAccessToken();
         const userRootPath = `${config.targetFolder}/${user.username}`;
         
+        // Search API: Tìm tất cả item là file trong folder của user
         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}:/search(q='')?select=id,name,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
         
         const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
         
         if (!res.ok) {
+            // Nếu folder chưa có thì trả về rỗng
             return [];
         }
         
@@ -285,7 +287,7 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
         const items = data.value || [];
 
         return items
-            .filter((i: any) => i.file) // Chỉ lấy file
+            .filter((i: any) => i.file) // Chỉ lấy file (bất kể định dạng)
             .sort((a: any, b: any) => new Date(b.lastModifiedDateTime).getTime() - new Date(a.lastModifiedDateTime).getTime())
             .map((i: any) => ({
                 id: i.id,
@@ -344,7 +346,7 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
          if (!res.ok) return [];
          const data = await res.json();
          
-         // Lọc các item là file
+         // Sử dụng hàm map chung
          return data.value.filter((i:any) => i.file).map(mapGraphItemToCloudItem);
      } catch (e) { return []; }
 };
@@ -355,6 +357,7 @@ export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> 
         const token = await getAccessToken();
         
         // CẬP NHẬT: Search toàn bộ file trong folder App và tính tổng dung lượng từ các file tìm được
+        // Lưu ý: Chúng ta dùng search(q='') để tìm đệ quy mọi file trong folder SnapSync302
         const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='')?select=id,file,size&top=999`;
         const searchRes = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
         
@@ -363,9 +366,10 @@ export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> 
 
         if (searchRes.ok) {
             const searchData = await searchRes.json();
-            // Lọc item là file và tính tổng
+            // Lọc item là file (để loại bỏ folder)
             const files = searchData.value ? searchData.value.filter((i: any) => i.file) : [];
             totalFiles = files.length;
+            // Cộng dồn size
             totalStorage = files.reduce((acc: number, curr: any) => acc + (curr.size || 0), 0);
         }
 
