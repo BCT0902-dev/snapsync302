@@ -530,10 +530,11 @@ export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> 
         let searchUrl: string | null = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?select=id,file&top=999`;
         
         while (searchUrl) {
-            const res = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+            // Fix TS7022: Explicit type annotations
+            const res: Response = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
             if (!res.ok) break;
             
-            const data = await res.json();
+            const data: any = await res.json();
             
             // Count items that are files
             if (data.value) {
