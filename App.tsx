@@ -755,25 +755,29 @@ export default function App() {
 
       if (!confirm(`Bạn có muốn tải xuống ${itemsToDownload.length} mục đã chọn?`)) return;
 
-      // Logic tải từng file (chỉ hỗ trợ file, folder bỏ qua hoặc cảnh báo)
       let count = 0;
       for (const item of itemsToDownload) {
           if (item.folder) {
               console.warn("Chưa hỗ trợ tải bulk folder:", item.name);
               continue;
           }
-          const targetUrl = item.downloadUrl || item.webUrl;
+          // Sử dụng logic tải có auth để tránh access denied
+          const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${item.id}/content`;
           try {
-              const a = document.createElement('a');
-              a.href = targetUrl;
-              a.download = item.name; // Gợi ý tên file
-              // Với link Azure trực tiếp, download attribute có thể không hoạt động nếu cross-origin, 
-              // nhưng browser thường tự xử lý header content-disposition
-              a.target = '_blank';
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              count++;
+              const token = await getAccessToken();
+              const res = await fetch(contentUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+              if(res.ok) {
+                  const blob = await res.blob();
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = item.name; 
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  window.URL.revokeObjectURL(url);
+                  count++;
+              }
           } catch(e) { console.error(e); }
           await new Promise(r => setTimeout(r, 500)); // Delay nhẹ
       }
@@ -989,11 +993,13 @@ export default function App() {
 
         // 3. Tải tuần tự
         let successCount = 0;
+        const token = await getAccessToken(); // Get token once
+
         for (const file of files) {
-            const targetUrl = file.downloadUrl || file.webUrl;
+            const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${file.id}/content`;
             try {
                 // Fetch blob để ép tên file và tránh mở tab
-                const res = await fetch(targetUrl);
+                const res = await fetch(contentUrl, { headers: { 'Authorization': `Bearer ${token}` } });
                 if(res.ok) {
                     const blob = await res.blob();
                     const url = window.URL.createObjectURL(blob);

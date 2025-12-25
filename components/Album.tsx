@@ -204,33 +204,26 @@ export const Album: React.FC<AlbumProps> = ({
     }
   };
 
-  // LOGIC TẢI VỀ (Sửa lỗi mở tab mới)
+  // LOGIC TẢI VỀ (Sửa lỗi mở tab mới & Access Denied)
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!selectedItem) return;
     
-    const targetUrl = selectedItem.downloadUrl || selectedItem.webUrl;
-    if (!targetUrl) { alert("Không tìm thấy link tải."); return; }
+    // Ưu tiên dùng Content API với Token để tránh Access Denied từ downloadUrl hết hạn
+    const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${selectedItem.id}/content`;
 
     try {
         setIsDownloading(true);
         
-        // 1. Thử tải không Auth (Pre-signed URL)
-        const headers: Record<string, string> = {};
-        let response = await fetch(targetUrl, { headers });
-
-        // 2. Nếu fail, thử tải có Auth (API Content)
-        if (!response.ok) {
-             const token = await getAccessToken();
-             const contentUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${selectedItem.id}/content`;
-             response = await fetch(contentUrl, {
-                 headers: { 'Authorization': `Bearer ${token}` }
-             });
-        }
+        // 1. Tải bằng API Content (Có auth token)
+        const token = await getAccessToken();
+        const response = await fetch(contentUrl, {
+             headers: { 'Authorization': `Bearer ${token}` }
+        });
         
-        if (!response.ok) throw new Error("Download failed");
+        if (!response.ok) throw new Error("Download failed with API");
         
-        // 3. Tạo Blob và tải
+        // 2. Tạo Blob và tải
         const blob = await response.blob();
         const blobUrl = window.URL.createObjectURL(blob);
         
@@ -243,9 +236,13 @@ export const Album: React.FC<AlbumProps> = ({
         document.body.removeChild(link);
         window.URL.revokeObjectURL(blobUrl);
     } catch (error) {
-        console.error("Lỗi download:", error);
-        // Fallback: Mở tab mới nếu mọi cách đều thua
-        window.open(targetUrl, '_blank');
+        console.error("Lỗi download, thử fallback:", error);
+        // Fallback: Nếu API lỗi, thử mở link downloadUrl gốc (Dễ bị Access Denied)
+        if (selectedItem.downloadUrl) {
+             window.open(selectedItem.downloadUrl, '_blank');
+        } else {
+             alert("Không thể tải file.");
+        }
     } finally {
         setIsDownloading(false);
     }

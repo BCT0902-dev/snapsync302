@@ -340,9 +340,30 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
 };
 
 export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> => {
-    // Placeholder - Cần API Reports của Graph (Khá phức tạp)
-    // Tạm thời trả về 0 để UI không lỗi
-    return { totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 };
+    if (config.simulateMode) return { totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 };
+    try {
+        const token = await getAccessToken();
+        
+        // 1. Lấy thông tin dung lượng từ Drive Quota
+        const quotaUrl = `https://graph.microsoft.com/v1.0/me/drive`;
+        const quotaRes = await fetch(quotaUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+        const quotaData = await quotaRes.json();
+        const totalStorage = quotaData.quota?.used || 0;
+
+        // 2. Tìm kiếm để đếm số lượng file (Giới hạn top 1000 để tối ưu performance cho truy vấn tổng quan)
+        // Chúng ta search những item có thuộc tính 'file'
+        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root/search(q='')?select=id,file&top=999`;
+        const searchRes = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+        const searchData = await searchRes.json();
+        
+        // Lọc lại để chắc chắn chỉ đếm file
+        const totalFiles = searchData.value ? searchData.value.filter((i: any) => i.file).length : 0;
+
+        return { totalUsers: 0, activeUsers: 0, totalFiles, totalStorage };
+    } catch (e) {
+        console.error("Fetch Stats Failed", e);
+        return { totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 };
+    }
 };
 
 export const aggregateUserStats = (media: CloudItem[], users: User[]): User[] => {
