@@ -1,3 +1,4 @@
+
 // BCT0902
 import { AppConfig, User, SystemConfig, CloudItem, PhotoRecord, UploadStatus, SystemStats, QRCodeLog, VisitorRecord } from '../types';
 import { INITIAL_USERS } from './mockAuth';
@@ -141,25 +142,29 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
     const data = await res.json();
     let items = data.value as any[];
     
-    // --- PHÂN QUYỀN HIỂN THỊ (QUAN TRỌNG) ---
-    // Nếu không phải Admin và đang ở thư mục gốc (path rỗng)
+    // --- PHÂN QUYỀN HIỂN THỊ ---
+    // Chỉ áp dụng khi user không phải admin VÀ đang xem thư mục gốc (path rỗng)
     if (user && user.role !== 'admin' && !cleanPath) {
-        // Tạo danh sách các folder được phép xem
         const allowedNames = new Set<string>();
         
-        // 1. Thư mục cá nhân (trùng username)
-        allowedNames.add(user.username);
+        // 1. Thư mục cá nhân: Tên trùng với username (theo logic upload)
+        // Lưu ý: Graph API không phân biệt hoa thường trong path, nhưng khi filter list items thì cần chính xác
+        // Nên ta sẽ so sánh toLowerCase()
+        allowedNames.add(user.username.toLowerCase());
         
         // 2. Thư mục chung
-        allowedNames.add('Tu_lieu_chung');
+        allowedNames.add('tu_lieu_chung');
         
-        // 3. Các thư mục được Admin cấp quyền (allowedPaths)
+        // 3. Các thư mục được Admin cấp quyền
         if (user.allowedPaths && Array.isArray(user.allowedPaths)) {
-            user.allowedPaths.forEach(p => allowedNames.add(p));
+            user.allowedPaths.forEach(p => allowedNames.add(p.toLowerCase()));
         }
 
-        // Lọc danh sách trả về
-        items = items.filter(item => allowedNames.has(item.name));
+        // Thực hiện lọc
+        items = items.filter(item => {
+            const itemName = item.name.toLowerCase();
+            return allowedNames.has(itemName);
+        });
     }
 
     return items.map(mapGraphItemToCloudItem);
@@ -245,11 +250,50 @@ export const renameOneDriveItem = async (config: AppConfig, itemId: string, newN
     } catch (e: any) { return { success: false, error: e.message }; }
 };
 
-export const moveOneDriveItem = async (config: AppConfig, itemId: string, destPath: string): Promise<boolean> => {
+export const moveOneDriveItem = async (config: AppConfig, itemId: string, destFolderName: string): Promise<boolean> => {
      if (config.simulateMode) return true;
-     // Cần tìm Parent ID của folder đích trước, logic này khá phức tạp nếu làm chuẩn.
-     // Ở đây tạm thời return true để UI không lỗi.
-     return true; 
+     
+     try {
+         const token = await getAccessToken();
+
+         // 1. Lấy ID của thư mục đích (VD: Tu_lieu_chung)
+         const destPathUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${destFolderName}?select=id`;
+         const destRes = await fetch(destPathUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+         
+         if (!destRes.ok) {
+             console.error("Destination folder not found");
+             return false;
+         }
+         
+         const destData = await destRes.json();
+         const targetFolderId = destData.id;
+
+         // 2. Thực hiện lệnh MOVE (PATCH parentReference)
+         const moveUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}`;
+         const moveBody = {
+             parentReference: {
+                 id: targetFolderId
+             },
+             // Có thể đổi tên file nếu cần thiết để tránh trùng lặp, nhưng Graph API sẽ tự xử lý hoặc báo lỗi
+             // name: "new_name.jpg" 
+         };
+
+         const moveRes = await fetch(moveUrl, {
+             method: 'PATCH',
+             headers: getHeaders(token),
+             body: JSON.stringify(moveBody)
+         });
+
+         if (moveRes.ok) return true;
+         
+         const err = await moveRes.json();
+         console.error("Move failed:", err);
+         return false;
+
+     } catch (e) {
+         console.error("Move Exception:", e);
+         return false;
+     }
 };
 
 export const createShareLink = async (config: AppConfig, itemId: string): Promise<string> => {
@@ -285,14 +329,12 @@ export const createShareLink = async (config: AppConfig, itemId: string): Promis
 };
 
 // --- CORE RECURSIVE CRAWLER ---
-// Hàm quét đệ quy mạnh mẽ để lấy tất cả file trong folder và subfolders
 const crawlFolder = async (token: string, folderUrl: string, selectFields: string, maxDepth: number = 5, currentDepth: number = 0): Promise<any[]> => {
     if (currentDepth > maxDepth) return [];
 
     let items: any[] = [];
     let nextLink = folderUrl;
 
-    // 1. Fetch tất cả items trong folder hiện tại (Xử lý phân trang)
     try {
         while (nextLink) {
             const res = await fetch(nextLink, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -302,19 +344,13 @@ const crawlFolder = async (token: string, folderUrl: string, selectFields: strin
             nextLink = data['@odata.nextLink'];
         }
     } catch (e) {
-        // Folder có thể chưa tồn tại (VD: User mới chưa có folder cá nhân)
-        // Không log error để tránh spam console
         return [];
     }
 
     let allFiles: any[] = items.filter((i: any) => i.file);
     const subFolders = items.filter((i: any) => i.folder);
 
-    // 2. Đệ quy xuống các subfolder
-    // Sử dụng Promise.all để chạy song song, tăng tốc độ
     const subTasks = subFolders.map(folder => {
-        // Construct URL cho folder con
-        // Dùng items endpoint ID để chắc chắn: /items/{id}/children
         const childUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${folder.id}/children?${selectFields}`;
         return crawlFolder(token, childUrl, selectFields, maxDepth, currentDepth + 1);
     });
@@ -335,22 +371,25 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     try {
         const token = await getAccessToken();
         
-        // Thay vì dùng Search API (có độ trễ index), ta dùng crawl trực tiếp Folder cá nhân của User
-        // Điều này đảm bảo file vừa upload sẽ hiện ngay lập tức
+        // --- TARGETED CRAWL (QUÉT CỤ THỂ) ---
+        // Chỉ quét vào thư mục của Tháng Hiện Tại của User
+        // Cấu trúc: username/T{month}/Tuần_{week}
         
-        // 1. Crawl Folder Cá nhân
+        const now = new Date();
+        const monthStr = (now.getMonth() + 1).toString().padStart(2, '0');
+        
+        // Path tới folder tháng hiện tại của User
+        const currentMonthPath = `${config.targetFolder}/${user.username}/T${monthStr}`;
         const selectFields = "$expand=thumbnails($select=medium,large)&$select=id,name,file,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl";
-        const personalFolderUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${user.username}:/children?${selectFields}`;
         
-        // Có thể user cũng muốn thấy file họ up vào Tu_lieu_chung (Optional, nhưng để đơn giản ta chỉ lấy personal trước)
-        // Nếu muốn lấy cả Tu_lieu_chung thì sẽ rất nặng vì đó là folder chung.
-        // Tốt nhất là chỉ lấy Personal Folder cho phần "Hoạt động gần đây"
+        const monthUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${currentMonthPath}:/children?${selectFields}`;
         
-        const allFiles = await crawlFolder(token, personalFolderUrl, selectFields, 3); // Độ sâu 3 là đủ (T{Thang}/Tuan_{Tuan})
+        // Crawl nhẹ (độ sâu 2: Tháng -> Tuần -> File)
+        const recentFiles = await crawlFolder(token, monthUrl, selectFields, 2);
 
-        return allFiles
+        return recentFiles
             .sort((a: any, b: any) => new Date(b.lastModifiedDateTime).getTime() - new Date(a.lastModifiedDateTime).getTime())
-            .slice(0, 50) // Lấy 50 file mới nhất
+            .slice(0, 50)
             .map((i: any) => ({
                 id: i.id,
                 fileName: i.name,
@@ -371,7 +410,6 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
 
 export const fetchUserDeletedItems = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
     if (config.simulateMode) return [];
-    // API Recycle Bin
     try {
         const token = await getAccessToken();
         const url = `https://graph.microsoft.com/v1.0/me/drive/root/recycleBin`;
@@ -401,7 +439,6 @@ export const fetchUserDeletedItems = async (config: AppConfig, user: User): Prom
 export const fetchAllMedia = async (config: AppConfig, user: User): Promise<CloudItem[]> => {
      if (config.simulateMode) return [];
      
-     // Cấu hình các trường cần lấy để hiển thị Gallery (có thumbnails)
      const selectFields = "$expand=thumbnails($select=medium,large)&$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,parentReference,@microsoft.graph.downloadUrl";
      
      try {
@@ -409,7 +446,7 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
          let allRawItems: any[] = [];
 
          if (user.role === 'admin') {
-             // ADMIN: Quét toàn bộ từ Root App Folder
+             // ADMIN: Quét toàn bộ Root
              const rootUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/children?${selectFields}`;
              allRawItems = await crawlFolder(token, rootUrl, selectFields);
          } else {
@@ -424,7 +461,7 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
              const commonUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Tu_lieu_chung:/children?${selectFields}`;
              promises.push(crawlFolder(token, commonUrl, selectFields));
              
-             // 3. Nhánh được cấp quyền (Allowed Paths)
+             // 3. Nhánh được cấp quyền
              if (user.allowedPaths && Array.isArray(user.allowedPaths)) {
                  for (const allowedPath of user.allowedPaths) {
                      const allowedUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${allowedPath}:/children?${selectFields}`;
@@ -436,9 +473,8 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
              results.forEach(res => allRawItems.push(...res));
          }
 
-         // Lọc file hệ thống lần cuối cho chắc
+         // Lọc và Map
          const systemFiles = ['users.json', 'config.json', 'qrcodes.json'];
-         // Lọc trùng lặp (vì allowedPaths có thể trùng với personal/common)
          const uniqueMap = new Map();
          allRawItems.forEach(i => {
              if (!systemFiles.includes(i.name.toLowerCase())) {
@@ -459,11 +495,10 @@ export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> 
     try {
         const token = await getAccessToken();
         
-        // 1. TỔNG DUNG LƯỢNG: Lấy chính xác từ thuộc tính size của folder gốc
+        // 1. TỔNG DUNG LƯỢNG
         const folderInfoUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}?select=size`;
         
-        // 2. TỔNG SỐ FILE: Dùng hàm Crawl nhưng chỉ select ID và File để nhẹ (không lấy thumbnails)
-        // Lưu ý: Việc này có thể mất vài giây nếu có hàng nghìn file, nhưng nó chính xác.
+        // 2. TỔNG SỐ FILE
         const minimalSelect = "$select=id,file,folder";
         const rootCrawlUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/children?${minimalSelect}`;
 
@@ -473,7 +508,7 @@ export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> 
         ]);
         
         let totalStorage = 0;
-        let totalFiles = allFiles.length; // Số file đếm được từ Crawl
+        let totalFiles = allFiles.length;
 
         if (folderRes.ok) {
             const folderData = await folderRes.json();
@@ -581,9 +616,21 @@ export const saveVisitor = async (config: AppConfig, unitCode: string, record: V
 export const updateVisitorStatus = async (config: AppConfig, unitCode: string, recordId: string, status: 'pending' | 'approved' | 'completed'): Promise<boolean> => {
      if (config.simulateMode) return true;
      try {
-        // Cần fetch lại file JSON của tháng đó, update record, rồi save lại.
-        // Logic này tương tự saveVisitor nhưng thay vì push thì map.
-        // Tạm thời return true.
-        return true;
+        const date = new Date(); // Giả định duyệt trong tháng hiện tại hoặc cần logic lấy ngày từ record
+        const monthStr = `${date.getFullYear()}_${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+        // Để đơn giản, giả sử unitCode và monthStr được truyền đúng từ UI
+        
+        const currentVisitors = await fetchVisitors(config, unitCode, monthStr);
+        const updatedVisitors = currentVisitors.map(v => v.id === recordId ? { ...v, status } : v);
+
+        const token = await getAccessToken();
+        const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Visits/${unitCode}_${monthStr}.json:/content`;
+
+        const res = await fetch(url, {
+            method: 'PUT',
+            headers: getHeaders(token),
+            body: JSON.stringify(updatedVisitors, null, 2)
+        });
+        return res.ok;
      } catch(e) { return false; }
 };
