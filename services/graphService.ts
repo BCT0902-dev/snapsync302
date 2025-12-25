@@ -1,3 +1,4 @@
+
 // BCT0902
 import { AppConfig, User, SystemConfig, CloudItem, PhotoRecord, UploadStatus, SystemStats, QRCodeLog, VisitorRecord } from '../types';
 import { INITIAL_USERS } from './mockAuth';
@@ -273,7 +274,7 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
         const userRootPath = `${config.targetFolder}/${user.username}`;
         
         // --- 1. TÌM KIẾM TOÀN BỘ (HISTORY) ---
-        // UPDATE: Sử dụng q=' ' (khoảng trắng) thay vì '*'
+        // Sử dụng search(q=' ') chỉ để lấy history gần nhất (có thể không đủ nhưng chấp nhận được cho History View)
         const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}:/search(q=' ')?select=id,name,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
         
         // --- 2. QUÉT TRỰC TIẾP TOÀN BỘ THÁNG NÀY (TUẦN 1 -> TUẦN 5) ---
@@ -363,35 +364,86 @@ export const fetchUserDeletedItems = async (config: AppConfig, user: User): Prom
     }
 };
 
+// --- CORE RECURSIVE CRAWLER ---
+// Hàm quét đệ quy mạnh mẽ để lấy tất cả file trong folder và subfolders
+const crawlFolder = async (token: string, folderUrl: string, selectFields: string, maxDepth: number = 5, currentDepth: number = 0): Promise<any[]> => {
+    if (currentDepth > maxDepth) return [];
+
+    let items: any[] = [];
+    let nextLink = folderUrl;
+
+    // 1. Fetch tất cả items trong folder hiện tại (Xử lý phân trang)
+    try {
+        while (nextLink) {
+            const res = await fetch(nextLink, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (!res.ok) break;
+            const data = await res.json();
+            items.push(...(data.value || []));
+            nextLink = data['@odata.nextLink'];
+        }
+    } catch (e) {
+        console.error("Error fetching folder items", e);
+        return [];
+    }
+
+    let allFiles: any[] = items.filter((i: any) => i.file);
+    const subFolders = items.filter((i: any) => i.folder);
+
+    // 2. Đệ quy xuống các subfolder
+    // Sử dụng Promise.all để chạy song song, tăng tốc độ
+    const subTasks = subFolders.map(folder => {
+        // Construct URL cho folder con
+        // Dùng items endpoint ID để chắc chắn: /items/{id}/children
+        const childUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${folder.id}/children?${selectFields}`;
+        return crawlFolder(token, childUrl, selectFields, maxDepth, currentDepth + 1);
+    });
+
+    const subResults = await Promise.all(subTasks);
+    subResults.forEach(res => {
+        allFiles = allFiles.concat(res);
+    });
+
+    return allFiles;
+};
+
 export const fetchAllMedia = async (config: AppConfig, user: User): Promise<CloudItem[]> => {
      if (config.simulateMode) return [];
+     
+     // Cấu hình các trường cần lấy để hiển thị Gallery (có thumbnails)
+     const selectFields = "$expand=thumbnails($select=medium,large)&$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,parentReference,@microsoft.graph.downloadUrl";
+     
      try {
          const token = await getAccessToken();
-         
-         // UPDATE: Dùng q=' ' (Space) để lấy tất cả thay vì '*'
-         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl,parentReference&top=999`;
-         
-         const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-         if (!res.ok) return [];
-         const data = await res.json();
-         
-         // Lọc file hệ thống
-         const systemFiles = ['users.json', 'config.json', 'qrcodes.json'];
-         let allFiles = data.value.filter((i:any) => i.file && !systemFiles.includes(i.name.toLowerCase()));
+         let allRawItems: any[] = [];
 
-         // LOGIC PHÂN QUYỀN:
-         // - Admin: Thấy hết
-         // - User: Chỉ thấy file có đường dẫn chứa username CỦA HỌ hoặc thư mục chung (Tu_lieu_chung)
-         if (user.role !== 'admin') {
-             allFiles = allFiles.filter((i: any) => {
-                 // parentReference.path có dạng: "/drive/root:/SnapSync302/user1/..."
-                 const path = i.parentReference?.path || "";
-                 return path.includes(`/${user.username}`) || path.includes("/Tu_lieu_chung");
-             });
+         if (user.role === 'admin') {
+             // ADMIN: Quét toàn bộ từ Root App Folder
+             const rootUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/children?${selectFields}`;
+             allRawItems = await crawlFolder(token, rootUrl, selectFields);
+         } else {
+             // USER: Quét 2 nhánh: Cá nhân & Chung
+             // 1. Nhánh cá nhân
+             const personalUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${user.username}:/children?${selectFields}`;
+             // 2. Nhánh chung
+             const commonUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Tu_lieu_chung:/children?${selectFields}`;
+             
+             const [personalFiles, commonFiles] = await Promise.all([
+                 crawlFolder(token, personalUrl, selectFields),
+                 crawlFolder(token, commonUrl, selectFields)
+             ]);
+             allRawItems = [...personalFiles, ...commonFiles];
          }
 
-         return allFiles.map(mapGraphItemToCloudItem);
-     } catch (e) { return []; }
+         // Lọc file hệ thống lần cuối cho chắc
+         const systemFiles = ['users.json', 'config.json', 'qrcodes.json'];
+         const validFiles = allRawItems.filter((i:any) => !systemFiles.includes(i.name.toLowerCase()));
+
+         return validFiles.map(mapGraphItemToCloudItem);
+
+     } catch (e) { 
+         console.error("Fetch All Media Failed", e);
+         return []; 
+     }
 };
 
 export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> => {
@@ -399,38 +451,25 @@ export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> 
     try {
         const token = await getAccessToken();
         
-        // BƯỚC 1: Lấy thông tin Folder Gốc để có DUNG LƯỢNG chuẩn xác nhất
+        // 1. TỔNG DUNG LƯỢNG: Lấy chính xác từ thuộc tính size của folder gốc
         const folderInfoUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}?select=size`;
         
-        // BƯỚC 2: Search đếm file (dùng q=' ' để match all) và select size để fallback
-        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?select=id,file,size&top=999`;
+        // 2. TỔNG SỐ FILE: Dùng hàm Crawl nhưng chỉ select ID và File để nhẹ (không lấy thumbnails)
+        // Lưu ý: Việc này có thể mất vài giây nếu có hàng nghìn file, nhưng nó chính xác.
+        const minimalSelect = "$select=id,file,folder";
+        const rootCrawlUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/children?${minimalSelect}`;
 
-        const [folderRes, searchRes] = await Promise.all([
+        const [folderRes, allFiles] = await Promise.all([
             fetch(folderInfoUrl, { headers: { 'Authorization': `Bearer ${token}` } }),
-            fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } })
+            crawlFolder(token, rootCrawlUrl, minimalSelect)
         ]);
         
-        let totalFiles = 0;
         let totalStorage = 0;
+        let totalFiles = allFiles.length; // Số file đếm được từ Crawl
 
-        // Xử lý Số lượng file & Fallback Storage
-        if (searchRes.ok) {
-            const searchData = await searchRes.json();
-            // Đếm các item có thuộc tính 'file'
-            const files = searchData.value ? searchData.value.filter((i: any) => i.file) : [];
-            totalFiles = files.length;
-            
-            // Tính tổng size từ các file (Fallback nếu folder size = 0)
-            const filesSize = files.reduce((acc: number, curr: any) => acc + (curr.size || 0), 0);
-            totalStorage = filesSize;
-        }
-
-        // Ưu tiên dùng Folder Size nếu API trả về hợp lệ
         if (folderRes.ok) {
             const folderData = await folderRes.json();
-            if (folderData.size > 0) {
-                totalStorage = folderData.size;
-            }
+            totalStorage = folderData.size || 0;
         }
 
         return { totalUsers: 0, activeUsers: 0, totalFiles, totalStorage };
