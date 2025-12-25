@@ -1,7 +1,8 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CloudItem, User } from '../types';
 import { Loader2, X, ChevronLeft, ChevronRight, Download, File as FileIcon, PlayCircle, Trash2, CheckSquare, Square, Eye, Share2, QrCode } from 'lucide-react';
+import { getAccessToken } from '../services/graphService';
 
 interface AlbumProps {
   items: CloudItem[];
@@ -9,14 +10,100 @@ interface AlbumProps {
   isAdmin?: boolean;
   currentUser?: User | null;
   onDelete?: (item: CloudItem) => void;
-  // Selection Props
   isSelectionMode?: boolean;
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string) => void;
-  // Share Props
   onShare?: (item: CloudItem) => void;
   onQR?: (item: CloudItem) => void;
 }
+
+// --- SUB COMPONENT: GALLERY ITEM (Xử lý tải ảnh an toàn từng ô) ---
+const GalleryItem = ({ item, isSelected, onToggleSelect, onClick }: { 
+    item: CloudItem, 
+    isSelected: boolean, 
+    onToggleSelect?: (id: string) => void,
+    onClick: (item: CloudItem) => void
+}) => {
+    const [src, setSrc] = useState<string | undefined>(item.thumbnailUrl);
+    const [isRetrying, setIsRetrying] = useState(false);
+    const [hasError, setHasError] = useState(false);
+
+    const handleLoadError = async () => {
+        if (isRetrying || !item.downloadUrl) {
+            setHasError(true);
+            return;
+        }
+        
+        setIsRetrying(true);
+        try {
+            const token = await getAccessToken();
+            const res = await fetch(item.downloadUrl, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const blob = await res.blob();
+                const blobUrl = URL.createObjectURL(blob);
+                setSrc(blobUrl);
+            } else {
+                setHasError(true);
+            }
+        } catch (e) {
+            setHasError(true);
+        } finally {
+            setIsRetrying(false);
+        }
+    };
+
+    return (
+        <div 
+            className={`aspect-square relative overflow-hidden bg-slate-100 cursor-pointer border border-slate-200 rounded-lg ${isSelected ? 'ring-4 ring-emerald-500 z-10' : ''}`}
+            onClick={() => onClick(item)}
+        >
+            {!hasError && src ? (
+                <>
+                    <img 
+                        src={src} 
+                        alt={item.name} 
+                        className={`w-full h-full object-cover transition-transform duration-500 hover:scale-110 ${isRetrying ? 'opacity-50' : 'opacity-100'}`} 
+                        loading="lazy"
+                        onError={handleLoadError}
+                    />
+                    {isRetrying && (
+                        <div className="absolute inset-0 flex items-center justify-center">
+                            <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
+                        </div>
+                    )}
+                </>
+            ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-1 bg-slate-50">
+                    <FileIcon className="w-8 h-8 mb-1 opacity-50" />
+                    <span className="text-[9px] truncate w-full text-center px-1">{item.name}</span>
+                </div>
+            )}
+            
+            {item.file?.mimeType?.startsWith('video/') && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/20 pointer-events-none">
+                    <PlayCircle className="w-8 h-8 text-white opacity-80" />
+                </div>
+            )}
+
+            {onToggleSelect && (
+                <div 
+                    className="absolute top-0 right-0 p-2 z-20" 
+                    onClick={(e) => { e.stopPropagation(); onToggleSelect(item.id); }}
+                >
+                    <div className={`rounded-md shadow-sm backdrop-blur-sm ${isSelected ? 'bg-emerald-500 text-white' : 'bg-black/40 text-white/80 hover:bg-black/60'}`}>
+                    {isSelected ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5" />}
+                    </div>
+                </div>
+            )}
+            
+            <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black/60 to-transparent p-1 pt-4 flex items-center justify-between text-[9px] text-white/90 pointer-events-none">
+                <span className="pl-1 truncate max-w-[70%]">{item.name}</span>
+            </div>
+        </div>
+    );
+};
 
 export const Album: React.FC<AlbumProps> = ({ 
     items, color, isAdmin = false, currentUser, onDelete,
@@ -24,17 +111,25 @@ export const Album: React.FC<AlbumProps> = ({
     onShare, onQR
 }) => {
   const [selectedItem, setSelectedItem] = useState<CloudItem | null>(null);
+  
+  // States cho Full View Modal
+  const [fullViewSrc, setFullViewSrc] = useState<string | undefined>("");
   const [isImgLoading, setIsImgLoading] = useState(false);
+  const [isSecureLoading, setIsSecureLoading] = useState(false); // Đang tải lại bằng token
+  
   const [isDownloading, setIsDownloading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
 
-  // Lọc chỉ hiển thị ảnh và video trong grid
   const mediaItems = items.filter(i => i.file);
 
   const handleOpenItem = (item: CloudItem) => {
     setSelectedItem(item);
+    // Reset states
+    const initialUrl = item.file?.mimeType?.startsWith('video/') ? (item.downloadUrl || item.webUrl) : (item.downloadUrl || item.thumbnailUrl);
+    setFullViewSrc(initialUrl);
     setIsImgLoading(true); 
+    setIsSecureLoading(false);
     setIsDownloading(false);
     setIsDeleting(false);
     setIsSharing(false);
@@ -42,10 +137,7 @@ export const Album: React.FC<AlbumProps> = ({
 
   const handleClose = () => {
     setSelectedItem(null);
-    setIsImgLoading(false);
-    setIsDownloading(false);
-    setIsDeleting(false);
-    setIsSharing(false);
+    setFullViewSrc("");
   };
 
   const handleNext = (e: React.MouseEvent) => {
@@ -66,6 +158,32 @@ export const Album: React.FC<AlbumProps> = ({
     }
   };
 
+  // Xử lý lỗi tải ảnh Full -> Thử tải lại bằng Token
+  const handleFullImageError = async () => {
+      if (isSecureLoading || !selectedItem?.downloadUrl) {
+          setIsImgLoading(false);
+          return;
+      }
+
+      setIsSecureLoading(true);
+      try {
+          const token = await getAccessToken();
+          const res = await fetch(selectedItem.downloadUrl, {
+              headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (res.ok) {
+              const blob = await res.blob();
+              const blobUrl = URL.createObjectURL(blob);
+              setFullViewSrc(blobUrl);
+          }
+      } catch (e) {
+          console.error("Secure load failed", e);
+      } finally {
+          setIsSecureLoading(false);
+          setIsImgLoading(false);
+      }
+  };
+
   const handleDelete = async () => {
     if (!selectedItem || !onDelete) return;
     if (!confirm(`Bạn có chắc chắn muốn xóa "${selectedItem.name}" vĩnh viễn không?`)) return;
@@ -73,9 +191,8 @@ export const Album: React.FC<AlbumProps> = ({
     setIsDeleting(true);
     try {
         await onDelete(selectedItem);
-        handleClose(); // Đóng modal sau khi xóa
+        handleClose();
     } catch (e) {
-        console.error("Delete failed in UI", e);
         setIsDeleting(false);
     }
   };
@@ -85,15 +202,16 @@ export const Album: React.FC<AlbumProps> = ({
     if (!selectedItem) return;
     
     const targetUrl = selectedItem.downloadUrl || selectedItem.webUrl;
-    
-    if (!targetUrl) {
-        alert("Không tìm thấy đường dẫn tải file.");
-        return;
-    }
+    if (!targetUrl) { alert("Không tìm thấy đường dẫn tải file."); return; }
 
     try {
         setIsDownloading(true);
-        const response = await fetch(targetUrl);
+        // Dùng token fetch blob để download an toàn
+        const token = await getAccessToken();
+        const response = await fetch(targetUrl, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
         if (!response.ok) throw new Error("Download failed");
         
         const blob = await response.blob();
@@ -108,7 +226,7 @@ export const Album: React.FC<AlbumProps> = ({
         document.body.removeChild(link);
         window.URL.revokeObjectURL(blobUrl);
     } catch (error) {
-        console.error("Blob download failed, fallback to direct link", error);
+        // Fallback: Mở tab mới
         window.open(targetUrl, '_blank');
     } finally {
         setIsDownloading(false);
@@ -118,23 +236,12 @@ export const Album: React.FC<AlbumProps> = ({
   const handleShareClick = async () => {
       if (!selectedItem || !onShare) return;
       setIsSharing(true);
-      try {
-          await onShare(selectedItem);
-      } finally {
-          setIsSharing(false);
-      }
+      try { await onShare(selectedItem); } finally { setIsSharing(false); }
   };
 
   const handleQRClick = async () => {
       if (!selectedItem || !onQR) return;
       onQR(selectedItem);
-  };
-
-  const getDisplayUrl = (item: CloudItem) => {
-      if (item.file?.mimeType?.startsWith('video/')) {
-          return item.downloadUrl || item.webUrl;
-      }
-      return item.downloadUrl || item.thumbnailUrl || "";
   };
 
   const canDelete = isAdmin || (currentUser && selectedItem && selectedItem.name.startsWith(currentUser.username + '_'));
@@ -145,149 +252,63 @@ export const Album: React.FC<AlbumProps> = ({
 
   return (
     <>
-      <div className="grid grid-cols-3 gap-1">
-        {mediaItems.map((item) => {
-          const isSelected = selectedIds?.has(item.id);
-          return (
-            <div 
-              key={item.id} 
-              className={`aspect-square relative overflow-hidden bg-slate-100 cursor-pointer ${isSelected ? 'ring-4 ring-emerald-500 z-10' : ''}`}
-              onClick={() => handleOpenItem(item)}
-            >
-              {item.thumbnailUrl ? (
-                  <img 
-                      src={item.thumbnailUrl} 
-                      alt={item.name} 
-                      className="w-full h-full object-cover transition-transform hover:scale-110" 
-                      loading="lazy"
-                  />
-              ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-1">
-                      <FileIcon className="w-6 h-6 mb-1" />
-                      <span className="text-[8px] truncate w-full text-center">{item.name}</span>
-                  </div>
-              )}
-              
-              {item.file?.mimeType?.startsWith('video/') && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                      <PlayCircle className="w-8 h-8 text-white opacity-80" />
-                  </div>
-              )}
-
-              {onToggleSelect && (
-                  <div 
-                    className={`absolute top-0 right-0 p-3 z-20`} 
-                    onClick={(e) => { 
-                        e.stopPropagation(); 
-                        onToggleSelect(item.id); 
-                    }}
-                  >
-                     <div className={`rounded-md shadow-sm backdrop-blur-sm ${isSelected ? 'bg-emerald-500 text-white' : 'bg-black/40 text-white/80 hover:bg-black/60'}`}>
-                        {isSelected ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5" />}
-                     </div>
-                  </div>
-              )}
-              
-              <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black/70 to-transparent p-1 pt-4 flex items-center justify-between text-[8px] text-white/90 pointer-events-none">
-                  <div className="flex items-center gap-1 pl-1">
-                      <Eye className="w-2.5 h-2.5" />
-                      <span>{item.views || 0}</span>
-                  </div>
-                  <div className="flex items-center gap-1 pr-1">
-                      <Download className="w-2.5 h-2.5" />
-                      <span>{item.downloads || 0}</span>
-                  </div>
-              </div>
-            </div>
-          );
-        })}
+      <div className="grid grid-cols-3 gap-1.5 pb-20">
+        {mediaItems.map((item) => (
+            <GalleryItem 
+                key={item.id} 
+                item={item} 
+                isSelected={selectedIds?.has(item.id) || false} 
+                onToggleSelect={onToggleSelect}
+                onClick={handleOpenItem}
+            />
+        ))}
       </div>
 
       {selectedItem && (
         <div className="fixed inset-0 z-[60] bg-black/95 flex flex-col animate-in fade-in duration-200">
-           <div className="flex justify-between items-center p-4 text-white bg-black/50 backdrop-blur-sm absolute top-0 w-full z-10">
-              <div className="truncate pr-4">
+           {/* Top Bar */}
+           <div className="flex justify-between items-center p-4 text-white bg-gradient-to-b from-black/80 to-transparent absolute top-0 w-full z-10">
+              <div className="truncate pr-4 flex-1">
                   <p className="text-sm font-bold truncate">{selectedItem.name}</p>
-                  <p className="text-xs text-white/60">{(selectedItem.size / 1024 / 1024).toFixed(2)} MB • {new Date(selectedItem.lastModifiedDateTime).toLocaleDateString()}</p>
+                  <p className="text-[10px] text-white/70">{(selectedItem.size / 1024 / 1024).toFixed(2)} MB • {new Date(selectedItem.lastModifiedDateTime).toLocaleDateString()}</p>
               </div>
-              <div className="flex gap-4 shrink-0 items-center">
-                  {onQR && (
-                      <button 
-                        onClick={handleQRClick}
-                        className="p-2 hover:bg-white/20 rounded-full flex items-center justify-center"
-                        title="Tạo mã QR"
-                      >
-                         <QrCode className="w-5 h-5" />
-                      </button>
-                  )}
-
-                  {onShare && (
-                      <button 
-                        onClick={handleShareClick}
-                        disabled={isSharing}
-                        className="p-2 hover:bg-white/20 rounded-full flex items-center justify-center disabled:opacity-50"
-                        title="Chia sẻ"
-                      >
-                         {isSharing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Share2 className="w-5 h-5" />}
-                      </button>
-                  )}
-
-                  {onDelete && canDelete && (
-                      <button 
-                        onClick={handleDelete}
-                        disabled={isDeleting}
-                        className="p-2 text-red-400 hover:bg-red-500/20 rounded-full flex items-center justify-center disabled:opacity-50"
-                        title="Xóa ảnh"
-                      >
-                         {isDeleting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Trash2 className="w-5 h-5" />}
-                      </button>
-                  )}
-                  <button 
-                    onClick={handleDownload} 
-                    disabled={isDownloading}
-                    className="p-2 hover:bg-white/20 rounded-full flex items-center justify-center disabled:opacity-50" 
-                    title="Tải xuống"
-                  >
-                    {isDownloading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
-                  </button>
+              <div className="flex gap-3 shrink-0 items-center">
+                  {onQR && <button onClick={handleQRClick} className="p-2 hover:bg-white/20 rounded-full"><QrCode className="w-5 h-5" /></button>}
+                  {onShare && <button onClick={handleShareClick} disabled={isSharing} className="p-2 hover:bg-white/20 rounded-full">{isSharing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Share2 className="w-5 h-5" />}</button>}
+                  {onDelete && canDelete && <button onClick={handleDelete} disabled={isDeleting} className="p-2 text-red-400 hover:bg-red-500/20 rounded-full">{isDeleting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Trash2 className="w-5 h-5" />}</button>}
+                  <button onClick={handleDownload} disabled={isDownloading} className="p-2 hover:bg-white/20 rounded-full">{isDownloading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}</button>
                   <button onClick={handleClose} className="p-2 hover:bg-white/20 rounded-full"><X className="w-6 h-6" /></button>
               </div>
            </div>
 
-           <div className="flex-1 flex items-center justify-center relative w-full h-full p-2" onClick={handleClose}>
+           {/* Main Viewer */}
+           <div className="flex-1 flex items-center justify-center relative w-full h-full p-0 sm:p-4 bg-black" onClick={handleClose}>
                {selectedItem.file?.mimeType?.startsWith('image/') ? (
                    <>
-                       {isImgLoading && <Loader2 className="w-10 h-10 text-white animate-spin absolute" />}
+                       {(isImgLoading || isSecureLoading) && <Loader2 className="w-10 h-10 text-emerald-500 animate-spin absolute z-0" />}
                        <img 
-                            src={getDisplayUrl(selectedItem)} 
+                            src={fullViewSrc} 
                             alt="Full view" 
-                            className={`max-h-full max-w-full object-contain shadow-2xl transition-opacity duration-300 ${isImgLoading ? 'opacity-0' : 'opacity-100'}`}
+                            className={`max-h-full max-w-full object-contain shadow-2xl transition-opacity duration-300 z-10 ${isImgLoading ? 'opacity-0' : 'opacity-100'}`}
                             onClick={(e) => e.stopPropagation()} 
                             onLoad={() => setIsImgLoading(false)}
-                            onError={() => setIsImgLoading(false)}
+                            onError={handleFullImageError}
                        />
                    </>
                ) : selectedItem.file?.mimeType?.startsWith('video/') ? (
-                   <video controls autoPlay className="max-h-full max-w-full" onClick={(e) => e.stopPropagation()}>
-                       <source src={getDisplayUrl(selectedItem)} type={selectedItem.file?.mimeType} />
+                   <video controls autoPlay className="max-h-full max-w-full z-10" onClick={(e) => e.stopPropagation()}>
+                       <source src={fullViewSrc} type={selectedItem.file?.mimeType} />
                        Trình duyệt không hỗ trợ video.
                    </video>
                ) : (
-                   <div className="text-white text-center">
-                       <FileIcon className="w-16 h-16 mx-auto mb-4 text-white/50" />
+                   <div className="text-white text-center z-10">
+                       <FileIcon className="w-20 h-20 mx-auto mb-4 text-slate-500" />
                        <p>Không thể xem trước file này.</p>
-                       <button 
-                            onClick={handleDownload}
-                            className="mt-4 inline-flex items-center bg-white text-black px-4 py-2 rounded-lg font-bold hover:bg-slate-200"
-                        >
-                            {isDownloading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
-                            Tải xuống
-                       </button>
                    </div>
                )}
 
-               <button onClick={handlePrev} className="absolute left-2 p-3 bg-black/30 text-white rounded-full hover:bg-white/20 backdrop-blur-md"><ChevronLeft className="w-6 h-6" /></button>
-               <button onClick={handleNext} className="absolute right-2 p-3 bg-black/30 text-white rounded-full hover:bg-white/20 backdrop-blur-md"><ChevronRight className="w-6 h-6" /></button>
+               <button onClick={handlePrev} className="absolute left-2 top-1/2 -translate-y-1/2 p-3 bg-black/40 text-white rounded-full hover:bg-white/20 backdrop-blur-md z-20"><ChevronLeft className="w-6 h-6" /></button>
+               <button onClick={handleNext} className="absolute right-2 top-1/2 -translate-y-1/2 p-3 bg-black/40 text-white rounded-full hover:bg-white/20 backdrop-blur-md z-20"><ChevronRight className="w-6 h-6" /></button>
            </div>
         </div>
       )}
