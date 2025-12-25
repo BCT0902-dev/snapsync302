@@ -93,8 +93,7 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                 let blob = await contentRes.blob();
                 
                 // --- LOGIC QUAN TRỌNG: ÉP KIỂU MIME TYPE DỰA TRÊN ĐUÔI FILE ---
-                // OneDrive đôi khi trả về 'application/octet-stream' cho ảnh/video, khiến thẻ <img>/<video> không hiển thị.
-                // Ta phải tự đoán MIME type chuẩn.
+                // OneDrive đôi khi trả về 'application/octet-stream' cho ảnh/video/pdf...
                 let mimeType = meta.file?.mimeType || 'application/octet-stream';
                 
                 if (mimeType === 'application/octet-stream' || !mimeType) {
@@ -108,6 +107,7 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                     else if (['mp4', 'm4v'].includes(ext)) mimeType = 'video/mp4';
                     else if (['mov'].includes(ext)) mimeType = 'video/quicktime';
                     else if (['webm'].includes(ext)) mimeType = 'video/webm';
+                    else if (['pdf'].includes(ext)) mimeType = 'application/pdf'; // Hỗ trợ PDF
                     
                     // Tạo lại Blob mới với đúng MIME type để trình duyệt hiểu
                     blob = blob.slice(0, blob.size, mimeType);
@@ -137,6 +137,7 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
         const name = fileData.name.toLowerCase();
         const mime = fileData.mimeType;
 
+        if (mime === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
         if (mime.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp|bmp|heic)$/.test(name)) return 'image';
         if (mime.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm|m4v|3gp)$/.test(name)) return 'video';
         return 'other';
@@ -188,7 +189,13 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
 
             {/* Viewer Content */}
             <div className="flex-1 flex items-center justify-center p-0 overflow-hidden relative w-full h-full">
-                {fileType === 'image' ? (
+                {fileType === 'pdf' ? (
+                     <iframe 
+                        src={fileData?.url} 
+                        className="w-full h-full border-0 bg-white"
+                        title={fileData?.name}
+                    />
+                ) : fileType === 'image' ? (
                     <img src={fileData?.url} alt="Content" className="max-w-full max-h-full object-contain" />
                 ) : fileType === 'video' ? (
                     <video 
