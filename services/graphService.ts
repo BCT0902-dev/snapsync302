@@ -274,32 +274,37 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
         const userRootPath = `${config.targetFolder}/${user.username}`;
         
         // --- 1. TÌM KIẾM TOÀN BỘ (HISTORY) ---
-        // Sử dụng q='*' để đảm bảo tìm thấy mọi loại file
-        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}:/search(q='*')?select=id,name,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
+        // Sử dụng q=' ' (khoảng trắng) thay vì '*' để tìm tất cả file hiệu quả hơn
+        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}:/search(q=' ')?select=id,name,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
         
-        // --- 2. QUÉT TRỰC TIẾP THƯ MỤC TUẦN NÀY (REAL-TIME RECENT) ---
-        // Để khắc phục độ trễ Indexing của Search API, ta quét thẳng vào folder tuần hiện tại
-        const currentWeekFolder = getCurrentWeekFolder();
-        const directUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}/${currentWeekFolder}:/children?$expand=thumbnails($select=medium,large)&$select=id,name,file,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl`;
+        // --- 2. QUÉT TRỰC TIẾP TOÀN BỘ THÁNG NÀY (TUẦN 1 -> TUẦN 5) ---
+        // Khắc phục triệt để độ trễ Search Index cho cả tháng
+        const now = new Date();
+        const monthStr = (now.getMonth() + 1).toString().padStart(2, '0');
+        const monthPath = `T${monthStr}`; // VD: T02
+        
+        const weekPromises = [];
+        for (let i = 1; i <= 5; i++) {
+            const weekUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}/${monthPath}/Tuần_${i}:/children?$expand=thumbnails($select=medium,large)&$select=id,name,file,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl`;
+            weekPromises.push(fetch(weekUrl, { headers: { 'Authorization': `Bearer ${token}` } }));
+        }
 
-        // Chạy song song
-        const [searchRes, directRes] = await Promise.allSettled([
+        // Chạy song song Search + 5 Weeks Direct Crawl
+        const allResponses = await Promise.allSettled([
             fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } }),
-            fetch(directUrl, { headers: { 'Authorization': `Bearer ${token}` } })
+            ...weekPromises
         ]);
 
         let allItems: any[] = [];
 
-        // Xử lý kết quả Search
-        if (searchRes.status === 'fulfilled' && searchRes.value.ok) {
-            const data = await searchRes.value.json();
-            if (data.value) allItems.push(...data.value);
-        }
-
-        // Xử lý kết quả Direct
-        if (directRes.status === 'fulfilled' && directRes.value.ok) {
-            const data = await directRes.value.json();
-            if (data.value) allItems.push(...data.value);
+        // Gom kết quả
+        for (const res of allResponses) {
+            if (res.status === 'fulfilled' && res.value.ok) {
+                try {
+                    const data = await res.value.json();
+                    if (data.value) allItems.push(...data.value);
+                } catch(e) {}
+            }
         }
 
         // Loại bỏ trùng lặp (Dựa vào ID)
@@ -364,14 +369,18 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
      if (config.simulateMode) return [];
      try {
          const token = await getAccessToken();
-         // CẬP NHẬT: search(q='*') để lấy TẤT CẢ các loại file, không bị sót
-         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='*')?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
+         // CẬP NHẬT: search(q=' ') (Space) để lấy TẤT CẢ mọi thứ
+         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?expand=thumbnails&top=999`;
          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
          if (!res.ok) return [];
          const data = await res.json();
          
-         // Lọc lấy file
-         return data.value.filter((i:any) => i.file).map(mapGraphItemToCloudItem);
+         // Lọc lấy file, NHƯNG loại bỏ file hệ thống (json) để Gallery sạch
+         const systemFiles = ['users.json', 'config.json', 'qrcodes.json'];
+         
+         return data.value
+            .filter((i:any) => i.file && !systemFiles.includes(i.name.toLowerCase()))
+            .map(mapGraphItemToCloudItem);
      } catch (e) { return []; }
 };
 
@@ -380,8 +389,8 @@ export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> 
     try {
         const token = await getAccessToken();
         
-        // CẬP NHẬT: Search toàn bộ file (q='*') để đếm và tính dung lượng CHÍNH XÁC
-        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='*')?select=id,file,size&top=999`;
+        // CẬP NHẬT: Search toàn bộ file (q=' ') và bỏ select để lấy full object (an toàn hơn)
+        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?top=999`;
         const searchRes = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
         
         let totalFiles = 0;
