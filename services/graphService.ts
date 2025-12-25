@@ -450,7 +450,6 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
 
         return items
             .sort((a: any, b: any) => new Date(b.lastModifiedDateTime).getTime() - new Date(a.lastModifiedDateTime).getTime())
-            .slice(0, 50)
             .map((i: any) => ({
                 id: i.id,
                 fileName: i.name,

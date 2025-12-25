@@ -62,6 +62,15 @@ interface ExtendedCloudItem extends CloudItem {
   hasLoadedChildren?: boolean;
 }
 
+const TabButton = ({ active, onClick, icon, label, color }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string, color?: string }) => (
+  <button onClick={onClick} className={`flex flex-col items-center justify-center w-full py-1 transition-all duration-200 ${active ? 'scale-105' : 'text-slate-400 hover:text-slate-600'}`} style={active ? { color: color } : {}}>
+    <div className={`w-6 h-6 ${active ? 'fill-current' : ''}`}>
+      {React.cloneElement(icon as React.ReactElement<any>, { size: 24, strokeWidth: active ? 2.5 : 2 })}
+    </div>
+    <span className="text-[10px] font-bold mt-1">{label}</span>
+  </button>
+);
+
 // --- SHARED FILE VIEWER (Dành cho khách quét QR) ---
 const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConfig: SystemConfig }) => {
     const [loading, setLoading] = useState(true);
@@ -1167,14 +1176,6 @@ export default function App() {
              u.unit.toLowerCase().includes(term);
   });
 
-  const getMonthlyPhotos = () => {
-    const now = new Date();
-    return photos.filter(p => 
-        p.timestamp.getMonth() === now.getMonth() && 
-        p.timestamp.getFullYear() === now.getFullYear()
-    );
-  };
-
   const getDisplayHistoryPhotos = () => {
     if (historyTab === 'deleted') {
         return deletedPhotos;
@@ -1389,20 +1390,20 @@ export default function App() {
             <div className="flex justify-between items-center mt-8 mb-4 border-b border-slate-200 pb-2">
               <h3 className="font-bold text-slate-700 flex items-center">
                 <History className="w-4 h-4 mr-2 text-slate-400" />
-                Hoạt động gần đây (Tháng {new Date().getMonth() + 1})
+                Hoạt động gần đây (Tất cả)
               </h3>
               <button onClick={() => setCurrentView('history')} className="text-xs font-bold hover:underline" style={textThemeStyle}>Xem tất cả</button>
             </div>
             {isHistoryLoading ? (
               <div className="text-center py-6 text-slate-400"><Loader2 className="w-6 h-6 mx-auto animate-spin mb-1" /> Đang đồng bộ...</div>
-            ) : getMonthlyPhotos().length === 0 ? (
+            ) : photos.length === 0 ? (
               <div className="text-center py-12 text-slate-400 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
                 <ImageIcon className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                <p>Chưa có dữ liệu trong tháng.</p>
+                <p>Chưa có dữ liệu.</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {getMonthlyPhotos().slice(0, 5).map((photo) => (
+                {photos.slice(0, 5).map((photo) => (
                   <div key={photo.id} className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center flex-wrap">
                     <PhotoPreview record={photo} />
                     <div className="ml-4 flex-1 min-w-0">
@@ -2092,7 +2093,7 @@ export default function App() {
                                                 />
                                             </div>
                                             <div className="ml-3 min-w-0">
-                                                <p className={`text-sm font-medium truncate ${isAllowed ? 'text-emerald-700' : 'text-slate-700'}`}>{folder.name}</p>
+                                                <p className="text-sm font-medium truncate ${isAllowed ? 'text-emerald-700' : 'text-slate-700'}`}>{folder.name}</p>
                                             </div>
                                         </label>
                                     </div>
@@ -2150,12 +2151,3 @@ export default function App() {
     </div>
   );
 }
-
-const TabButton = ({ active, onClick, icon, label, color }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string, color?: string }) => (
-  <button onClick={onClick} className={`flex flex-col items-center justify-center w-full py-1 transition-all duration-200 ${active ? 'scale-105' : 'text-slate-400 hover:text-slate-600'}`} style={active ? { color: color } : {}}>
-    <div className={`w-6 h-6 ${active ? 'fill-current' : ''}`}>
-      {React.cloneElement(icon as React.ReactElement<any>, { size: 24, strokeWidth: active ? 2.5 : 2 })}
-    </div>
-    <span className="text-[10px] font-bold mt-1">{label}</span>
-  </button>
-);
