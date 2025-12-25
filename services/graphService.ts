@@ -568,25 +568,19 @@ export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> 
             totalStorage = folderData.size || 0;
         }
 
-        // 2. Count Files (Handle Pagination for accuracy > 999 files)
-        let totalFiles = 0;
-        let searchUrl: string | null = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?select=id,file&top=999`;
+        // 2. Count Files (RECURSIVE CRAWL TO MATCH "VIEW ALL")
+        // Use optimized fields to make it faster than full fetchAllMedia
+        const selectFields = "select=id,name,file,folder";
+        const rootUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/children?${selectFields}`;
         
-        while (searchUrl) {
-            // Fix TS7022: Explicit type annotations
-            const res: Response = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-            if (!res.ok) break;
-            
-            const data: any = await res.json();
-            
-            // Count items that are files
-            if (data.value) {
-                totalFiles += data.value.filter((i: any) => i.file).length;
-            }
-            
-            // Check for next page link
-            searchUrl = data['@odata.nextLink'] || null;
-        }
+        const allItems = await crawlFolder(token, rootUrl, selectFields);
+        
+        // Filter out system files exactly like fetchAllMedia
+        const validFiles = allItems.filter(i => 
+            i.file && !['users.json', 'config.json', 'qrcodes.json'].includes(i.name.toLowerCase())
+        );
+        
+        const totalFiles = validFiles.length;
 
         return { totalUsers: 0, activeUsers: 0, totalFiles, totalStorage };
     } catch (e) {
