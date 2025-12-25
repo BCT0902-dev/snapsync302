@@ -1,4 +1,3 @@
-
 // BCT0902
 import { AppConfig, User, SystemConfig, CloudItem, PhotoRecord, UploadStatus, SystemStats, QRCodeLog, VisitorRecord } from '../types';
 import { INITIAL_USERS } from './mockAuth';
@@ -140,8 +139,29 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
     if (!res.ok) return [];
     
     const data = await res.json();
-    const items = data.value as any[];
+    let items = data.value as any[];
     
+    // --- PHÂN QUYỀN HIỂN THỊ (QUAN TRỌNG) ---
+    // Nếu không phải Admin và đang ở thư mục gốc (path rỗng)
+    if (user && user.role !== 'admin' && !cleanPath) {
+        // Tạo danh sách các folder được phép xem
+        const allowedNames = new Set<string>();
+        
+        // 1. Thư mục cá nhân (trùng username)
+        allowedNames.add(user.username);
+        
+        // 2. Thư mục chung
+        allowedNames.add('Tu_lieu_chung');
+        
+        // 3. Các thư mục được Admin cấp quyền (allowedPaths)
+        if (user.allowedPaths && Array.isArray(user.allowedPaths)) {
+            user.allowedPaths.forEach(p => allowedNames.add(p));
+        }
+
+        // Lọc danh sách trả về
+        items = items.filter(item => allowedNames.has(item.name));
+    }
+
     return items.map(mapGraphItemToCloudItem);
   } catch (e) {
     console.error(e);
@@ -264,6 +284,49 @@ export const createShareLink = async (config: AppConfig, itemId: string): Promis
     }
 };
 
+// --- CORE RECURSIVE CRAWLER ---
+// Hàm quét đệ quy mạnh mẽ để lấy tất cả file trong folder và subfolders
+const crawlFolder = async (token: string, folderUrl: string, selectFields: string, maxDepth: number = 5, currentDepth: number = 0): Promise<any[]> => {
+    if (currentDepth > maxDepth) return [];
+
+    let items: any[] = [];
+    let nextLink = folderUrl;
+
+    // 1. Fetch tất cả items trong folder hiện tại (Xử lý phân trang)
+    try {
+        while (nextLink) {
+            const res = await fetch(nextLink, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (!res.ok) break;
+            const data = await res.json();
+            items.push(...(data.value || []));
+            nextLink = data['@odata.nextLink'];
+        }
+    } catch (e) {
+        // Folder có thể chưa tồn tại (VD: User mới chưa có folder cá nhân)
+        // Không log error để tránh spam console
+        return [];
+    }
+
+    let allFiles: any[] = items.filter((i: any) => i.file);
+    const subFolders = items.filter((i: any) => i.folder);
+
+    // 2. Đệ quy xuống các subfolder
+    // Sử dụng Promise.all để chạy song song, tăng tốc độ
+    const subTasks = subFolders.map(folder => {
+        // Construct URL cho folder con
+        // Dùng items endpoint ID để chắc chắn: /items/{id}/children
+        const childUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${folder.id}/children?${selectFields}`;
+        return crawlFolder(token, childUrl, selectFields, maxDepth, currentDepth + 1);
+    });
+
+    const subResults = await Promise.all(subTasks);
+    subResults.forEach(res => {
+        allFiles = allFiles.concat(res);
+    });
+
+    return allFiles;
+};
+
 // --- HISTORY & STATS ---
 
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
@@ -271,52 +334,23 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     
     try {
         const token = await getAccessToken();
-        const userRootPath = `${config.targetFolder}/${user.username}`;
         
-        // --- 1. TÌM KIẾM TOÀN BỘ (HISTORY) ---
-        // Sử dụng search(q=' ') chỉ để lấy history gần nhất (có thể không đủ nhưng chấp nhận được cho History View)
-        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}:/search(q=' ')?select=id,name,file,webUrl,lastModifiedDateTime,size,thumbnails,@microsoft.graph.downloadUrl&top=999`;
+        // Thay vì dùng Search API (có độ trễ index), ta dùng crawl trực tiếp Folder cá nhân của User
+        // Điều này đảm bảo file vừa upload sẽ hiện ngay lập tức
         
-        // --- 2. QUÉT TRỰC TIẾP TOÀN BỘ THÁNG NÀY (TUẦN 1 -> TUẦN 5) ---
-        const now = new Date();
-        const monthStr = (now.getMonth() + 1).toString().padStart(2, '0');
-        const monthPath = `T${monthStr}`; // VD: T02
+        // 1. Crawl Folder Cá nhân
+        const selectFields = "$expand=thumbnails($select=medium,large)&$select=id,name,file,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl";
+        const personalFolderUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${user.username}:/children?${selectFields}`;
         
-        const weekPromises = [];
-        for (let i = 1; i <= 5; i++) {
-            const weekUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${userRootPath}/${monthPath}/Tuần_${i}:/children?$expand=thumbnails($select=medium,large)&$select=id,name,file,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl`;
-            weekPromises.push(fetch(weekUrl, { headers: { 'Authorization': `Bearer ${token}` } }));
-        }
+        // Có thể user cũng muốn thấy file họ up vào Tu_lieu_chung (Optional, nhưng để đơn giản ta chỉ lấy personal trước)
+        // Nếu muốn lấy cả Tu_lieu_chung thì sẽ rất nặng vì đó là folder chung.
+        // Tốt nhất là chỉ lấy Personal Folder cho phần "Hoạt động gần đây"
+        
+        const allFiles = await crawlFolder(token, personalFolderUrl, selectFields, 3); // Độ sâu 3 là đủ (T{Thang}/Tuan_{Tuan})
 
-        // Chạy song song Search + 5 Weeks Direct Crawl
-        const allResponses = await Promise.allSettled([
-            fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } }),
-            ...weekPromises
-        ]);
-
-        let allItems: any[] = [];
-
-        // Gom kết quả
-        for (const res of allResponses) {
-            if (res.status === 'fulfilled' && res.value.ok) {
-                try {
-                    const data = await res.value.json();
-                    if (data.value) allItems.push(...data.value);
-                } catch(e) {}
-            }
-        }
-
-        // Loại bỏ trùng lặp (Dựa vào ID)
-        const uniqueItemsMap = new Map();
-        allItems.forEach(item => {
-            if (item.file) { // Chỉ lấy file
-                uniqueItemsMap.set(item.id, item);
-            }
-        });
-        const uniqueItems = Array.from(uniqueItemsMap.values());
-
-        return uniqueItems
+        return allFiles
             .sort((a: any, b: any) => new Date(b.lastModifiedDateTime).getTime() - new Date(a.lastModifiedDateTime).getTime())
+            .slice(0, 50) // Lấy 50 file mới nhất
             .map((i: any) => ({
                 id: i.id,
                 fileName: i.name,
@@ -364,48 +398,6 @@ export const fetchUserDeletedItems = async (config: AppConfig, user: User): Prom
     }
 };
 
-// --- CORE RECURSIVE CRAWLER ---
-// Hàm quét đệ quy mạnh mẽ để lấy tất cả file trong folder và subfolders
-const crawlFolder = async (token: string, folderUrl: string, selectFields: string, maxDepth: number = 5, currentDepth: number = 0): Promise<any[]> => {
-    if (currentDepth > maxDepth) return [];
-
-    let items: any[] = [];
-    let nextLink = folderUrl;
-
-    // 1. Fetch tất cả items trong folder hiện tại (Xử lý phân trang)
-    try {
-        while (nextLink) {
-            const res = await fetch(nextLink, { headers: { 'Authorization': `Bearer ${token}` } });
-            if (!res.ok) break;
-            const data = await res.json();
-            items.push(...(data.value || []));
-            nextLink = data['@odata.nextLink'];
-        }
-    } catch (e) {
-        console.error("Error fetching folder items", e);
-        return [];
-    }
-
-    let allFiles: any[] = items.filter((i: any) => i.file);
-    const subFolders = items.filter((i: any) => i.folder);
-
-    // 2. Đệ quy xuống các subfolder
-    // Sử dụng Promise.all để chạy song song, tăng tốc độ
-    const subTasks = subFolders.map(folder => {
-        // Construct URL cho folder con
-        // Dùng items endpoint ID để chắc chắn: /items/{id}/children
-        const childUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${folder.id}/children?${selectFields}`;
-        return crawlFolder(token, childUrl, selectFields, maxDepth, currentDepth + 1);
-    });
-
-    const subResults = await Promise.all(subTasks);
-    subResults.forEach(res => {
-        allFiles = allFiles.concat(res);
-    });
-
-    return allFiles;
-};
-
 export const fetchAllMedia = async (config: AppConfig, user: User): Promise<CloudItem[]> => {
      if (config.simulateMode) return [];
      
@@ -421,24 +413,40 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
              const rootUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/children?${selectFields}`;
              allRawItems = await crawlFolder(token, rootUrl, selectFields);
          } else {
-             // USER: Quét 2 nhánh: Cá nhân & Chung
+             // USER THƯỜNG: Quét các nhánh được phép
+             const promises = [];
+
              // 1. Nhánh cá nhân
              const personalUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${user.username}:/children?${selectFields}`;
+             promises.push(crawlFolder(token, personalUrl, selectFields));
+
              // 2. Nhánh chung
              const commonUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Tu_lieu_chung:/children?${selectFields}`;
+             promises.push(crawlFolder(token, commonUrl, selectFields));
              
-             const [personalFiles, commonFiles] = await Promise.all([
-                 crawlFolder(token, personalUrl, selectFields),
-                 crawlFolder(token, commonUrl, selectFields)
-             ]);
-             allRawItems = [...personalFiles, ...commonFiles];
+             // 3. Nhánh được cấp quyền (Allowed Paths)
+             if (user.allowedPaths && Array.isArray(user.allowedPaths)) {
+                 for (const allowedPath of user.allowedPaths) {
+                     const allowedUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${allowedPath}:/children?${selectFields}`;
+                     promises.push(crawlFolder(token, allowedUrl, selectFields));
+                 }
+             }
+             
+             const results = await Promise.all(promises);
+             results.forEach(res => allRawItems.push(...res));
          }
 
          // Lọc file hệ thống lần cuối cho chắc
          const systemFiles = ['users.json', 'config.json', 'qrcodes.json'];
-         const validFiles = allRawItems.filter((i:any) => !systemFiles.includes(i.name.toLowerCase()));
+         // Lọc trùng lặp (vì allowedPaths có thể trùng với personal/common)
+         const uniqueMap = new Map();
+         allRawItems.forEach(i => {
+             if (!systemFiles.includes(i.name.toLowerCase())) {
+                 uniqueMap.set(i.id, i);
+             }
+         });
 
-         return validFiles.map(mapGraphItemToCloudItem);
+         return Array.from(uniqueMap.values()).map(mapGraphItemToCloudItem);
 
      } catch (e) { 
          console.error("Fetch All Media Failed", e);
