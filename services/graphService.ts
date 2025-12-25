@@ -399,38 +399,44 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     
     try {
         const token = await getAccessToken();
-        
-        // --- SỬ DỤNG SEARCH API ---
         const selectFields = "select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference,thumbnails,@microsoft.graph.downloadUrl";
-        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?${selectFields}&top=200`;
-        
-        const res = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-        
-        if (!res.ok) return [];
 
-        const data = await res.json();
-        let items = data.value || [];
+        let allFiles: any[] = [];
 
-        // --- LỌC KẾT QUẢ CHO USER THƯỜNG ---
-        if (user.role !== 'admin') {
-            const leafUnit = getLeafUnitName(user.unit).toLowerCase();
-            const username = user.username.toLowerCase();
-            
-            items = items.filter((i: any) => {
-                const path = i.parentReference?.path || "";
-                const decodedPath = decodeURIComponent(path).toLowerCase();
-                
-                // User thấy file nếu:
-                // 1. File nằm trong folder Đơn vị cấp cuối của họ (VD: "đại đội 18")
-                // 2. File nằm trong folder Chờ duyệt của họ
-                return decodedPath.includes(`/${leafUnit}`) || 
-                       decodedPath.includes(`/${username}`) ||
-                       decodedPath.includes('tu_lieu_chung_cho_duyet');
-            });
+        // ADMIN: Vẫn dùng Search cho nhanh (Root context) hoặc Crawl nếu Search lỗi. 
+        // Để đảm bảo nhất, ta dùng Crawl luôn nếu Search không tin cậy, nhưng với Admin Search thường OK.
+        // Tuy nhiên để đồng nhất, ta dùng Crawl targeted cho Admin cũng được, nhưng Admin cần xem ALL.
+        if (user.role === 'admin') {
+             const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?${selectFields}&top=200`;
+             const res = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+             if (res.ok) {
+                 const data = await res.json();
+                 allFiles = data.value || [];
+             }
+        } else {
+             // USER: CRAWL DIRECTLY (Fix lỗi không hiện History)
+             // Quét 2 nơi: Thư mục Đơn vị và Thư mục Chờ duyệt của họ
+             const leafUnit = getLeafUnitName(user.unit);
+             const urlsToCrawl = [
+                 `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${leafUnit}:/children?${selectFields}`,
+                 `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Tu_lieu_chung_Cho_duyet/${user.username}:/children?${selectFields}`,
+                 `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Tu_lieu_chung:/children?${selectFields}` // Thêm Common nếu muốn hiện trong history
+             ];
+
+             const promises = urlsToCrawl.map(u => crawlFolder(token, u, selectFields));
+             const results = await Promise.all(promises);
+             allFiles = results.flat();
         }
 
+        // Deduplicate & Filter
+        const uniqueMap = new Map();
+        allFiles.forEach(i => {
+             if(i.file) uniqueMap.set(i.id, i);
+        });
+
+        const items = Array.from(uniqueMap.values());
+
         return items
-            .filter((i: any) => i.file) // Chỉ lấy file
             .sort((a: any, b: any) => new Date(b.lastModifiedDateTime).getTime() - new Date(a.lastModifiedDateTime).getTime())
             .slice(0, 50)
             .map((i: any) => ({
@@ -480,8 +486,9 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
      const selectFields = "$expand=thumbnails($select=medium,large)&$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,parentReference,@microsoft.graph.downloadUrl";
      try {
          const token = await getAccessToken();
-         // ADMIN dùng Crawl để xem tất cả chính xác nhất
+         
          if (user.role === 'admin') {
+             // ADMIN: CRAWL ROOT
              const rootUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/children?${selectFields}`;
              const allRawItems = await crawlFolder(token, rootUrl, selectFields);
              const uniqueMap = new Map();
@@ -491,23 +498,39 @@ export const fetchAllMedia = async (config: AppConfig, user: User): Promise<Clou
                  }
              });
              return Array.from(uniqueMap.values()).map(mapGraphItemToCloudItem);
-         } 
-         
-         // USER THƯỜNG: Dùng Search cho nhanh
-         const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?${selectFields}&top=999`;
-         const res = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-         if(!res.ok) return [];
-         const data = await res.json();
-         let items = data.value || [];
-         
-         // Filter User View
-         const leafUnit = getLeafUnitName(user.unit).toLowerCase();
-         items = items.filter((i: any) => {
-             const path = decodeURIComponent(i.parentReference?.path || "").toLowerCase();
-             return path.includes(leafUnit) || path.includes('tu_lieu_chung') || path.includes(user.username.toLowerCase());
-         });
-         
-         return items.filter((i:any) => i.file).map(mapGraphItemToCloudItem);
+         } else {
+             // USER: CRAWL TARGETED FOLDERS (Fix lỗi View All trống)
+             const leafUnit = getLeafUnitName(user.unit);
+             
+             // Danh sách các folder user được phép xem
+             const urlsToCrawl = [
+                 `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${leafUnit}:/children?${selectFields}`,
+                 `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Tu_lieu_chung:/children?${selectFields}`,
+                 `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Tu_lieu_chung_Cho_duyet/${user.username}:/children?${selectFields}`
+             ];
+
+             // Thêm các folder được cấp quyền riêng (nếu có)
+             if (user.allowedPaths && Array.isArray(user.allowedPaths)) {
+                 user.allowedPaths.forEach(path => {
+                     urlsToCrawl.push(`https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${path}:/children?${selectFields}`);
+                 });
+             }
+
+             const promises = urlsToCrawl.map(u => crawlFolder(token, u, selectFields));
+             const results = await Promise.all(promises);
+             const combined = results.flat();
+
+             // Deduplicate
+             const uniqueMap = new Map();
+             combined.forEach(i => {
+                 // Chỉ lấy file, và loại bỏ các file cấu hình hệ thống nếu lỡ lọt vào
+                 if (i.file && !['users.json', 'config.json', 'qrcodes.json'].includes(i.name.toLowerCase())) {
+                     uniqueMap.set(i.id, i);
+                 }
+             });
+             
+             return Array.from(uniqueMap.values()).map(mapGraphItemToCloudItem);
+         }
      } catch (e) { return []; }
 };
 
