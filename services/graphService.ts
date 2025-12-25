@@ -134,7 +134,7 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
       `:/${config.targetFolder}:/children`;
     
     // Select các trường cần thiết để tối ưu tốc độ và lấy đúng link ảnh
-    const url = `https://graph.microsoft.com/v1.0/me/drive/root${target}?$expand=thumbnails($select=medium,large)&$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,video,image,@microsoft.graph.downloadUrl`;
+    const url = `https://graph.microsoft.com/v1.0/me/drive/root${target}?$expand=thumbnails($select=medium,large)&$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,video,image,parentReference,@microsoft.graph.downloadUrl`;
     
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
     if (!res.ok) return [];
@@ -142,16 +142,22 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
     const data = await res.json();
     let items = data.value as any[];
     
-    // --- PHÂN QUYỀN HIỂN THỊ ---
-    // Chỉ áp dụng khi user không phải admin VÀ đang xem thư mục gốc (path rỗng)
+    // --- PHÂN QUYỀN HIỂN THỊ (SỬA LẠI LOGIC) ---
+    // Logic: Nếu là user thường và đang ở thư mục gốc (cleanPath rỗng)
     if (user && user.role !== 'admin' && !cleanPath) {
         const allowedNames = new Set<string>();
         
-        // 1. Thư mục cá nhân: Tên trùng với username (theo logic upload)
-        // Lưu ý: Graph API không phân biệt hoa thường trong path, nhưng khi filter list items thì cần chính xác
-        // Nên ta sẽ so sánh toLowerCase()
-        allowedNames.add(user.username.toLowerCase());
+        // 1. Thư mục Đơn vị (Unit): Lấy phần đầu tiên của Unit
+        // Ví dụ: user.unit = "Sư đoàn 302/Phòng Tham mưu" -> Folder là "Sư đoàn 302" (nếu cấu trúc lồng nhau) hoặc chính xác tên unit nếu admin tạo phẳng.
+        // Để an toàn và đúng logic user yêu cầu: User d18 -> Folder Tiểu đoàn 18.
+        // Ta sẽ cho phép user thấy folder có tên TRÙNG hoặc CHỨA tên unit của họ.
+        // Hoặc đơn giản nhất: Cho phép thấy folder khớp với user.unit (hoặc phần đầu của nó).
         
+        // Cách tốt nhất: Lấy root segment của Unit.
+        const unitRoot = user.unit.split('/')[0].toLowerCase();
+        allowedNames.add(unitRoot);
+        allowedNames.add(user.unit.toLowerCase()); // Thêm cả full path cho chắc
+
         // 2. Thư mục chung
         allowedNames.add('tu_lieu_chung');
         
@@ -160,10 +166,10 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
             user.allowedPaths.forEach(p => allowedNames.add(p.toLowerCase()));
         }
 
-        // Thực hiện lọc
+        // Thực hiện lọc: Chỉ hiện folder có tên nằm trong danh sách cho phép
         items = items.filter(item => {
             const itemName = item.name.toLowerCase();
-            return allowedNames.has(itemName);
+            return allowedNames.has(itemName) || itemName.includes(unitRoot); // Mở rộng điều kiện lọc
         });
     }
 
@@ -197,10 +203,12 @@ export const uploadToOneDrive = async (file: File, config: AppConfig, user: User
     let folderPath = '';
 
     if (destination === 'personal') {
-        // Cấu trúc: .../Username/T{Tháng}/Tuần_{Tuần}
+        // --- SỬA LOGIC PATH: Dùng user.unit thay vì user.username ---
+        // Ví dụ: SnapSync302/Tiểu đoàn 18/T02/Tuần_4
         const timePath = getCurrentWeekFolder();
-        folderPath = `${config.targetFolder}/${user.username}/${timePath}`;
+        folderPath = `${config.targetFolder}/${user.unit}/${timePath}`;
     } else {
+        // Tư liệu chung chờ duyệt: Vẫn giữ username để biết ai gửi
         folderPath = `${config.targetFolder}/Tu_lieu_chung_Cho_duyet/${user.username}`;
     }
         
@@ -257,11 +265,12 @@ export const moveOneDriveItem = async (config: AppConfig, itemId: string, destFo
          const token = await getAccessToken();
 
          // 1. Lấy ID của thư mục đích (VD: Tu_lieu_chung)
-         const destPathUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${destFolderName}?select=id`;
+         // Search chính xác tên folder tại root của App
+         const destPathUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${destFolderName}?select=id,name`;
          const destRes = await fetch(destPathUrl, { headers: { 'Authorization': `Bearer ${token}` } });
          
          if (!destRes.ok) {
-             console.error("Destination folder not found");
+             console.error("Destination folder not found:", destFolderName);
              return false;
          }
          
@@ -270,12 +279,13 @@ export const moveOneDriveItem = async (config: AppConfig, itemId: string, destFo
 
          // 2. Thực hiện lệnh MOVE (PATCH parentReference)
          const moveUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}`;
+         
+         // Payload chuẩn để Move trong Graph API
          const moveBody = {
              parentReference: {
                  id: targetFolderId
              },
-             // Có thể đổi tên file nếu cần thiết để tránh trùng lặp, nhưng Graph API sẽ tự xử lý hoặc báo lỗi
-             // name: "new_name.jpg" 
+             name: undefined // Giữ nguyên tên file
          };
 
          const moveRes = await fetch(moveUrl, {
@@ -284,10 +294,12 @@ export const moveOneDriveItem = async (config: AppConfig, itemId: string, destFo
              body: JSON.stringify(moveBody)
          });
 
-         if (moveRes.ok) return true;
+         if (moveRes.ok || moveRes.status === 202) {
+             return true;
+         }
          
          const err = await moveRes.json();
-         console.error("Move failed:", err);
+         console.error("Move failed details:", err);
          return false;
 
      } catch (e) {
@@ -301,26 +313,15 @@ export const createShareLink = async (config: AppConfig, itemId: string): Promis
     try {
         const token = await getAccessToken();
         const url = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/createLink`;
-        
-        // 1. Cố gắng tạo link 'anonymous' (Ai cũng xem được, không cần đăng nhập)
         let body = { type: 'view', scope: 'anonymous' };
-        
         let res = await fetch(url, {
             method: 'POST',
             headers: getHeaders(token),
             body: JSON.stringify(body)
         });
-
-        // 2. Nếu thất bại (Lỗi 400/403 - Do chính sách công ty chặn Anonymous)
         if (!res.ok) {
-             const errorData = await res.json();
-             console.warn("Anonymous link failed", errorData);
-             
-             // Thử lại với scope organization (Chỉ nội bộ xem được)
-             // Hoặc throw error để UI báo người dùng biết
-             throw new Error("Tổ chức không cho phép chia sẻ công khai (Anonymous). Chỉ có thể chia sẻ nội bộ.");
+             throw new Error("Tổ chức không cho phép chia sẻ công khai (Anonymous).");
         }
-
         const data = await res.json();
         return data.link.webUrl;
     } catch (e: any) { 
@@ -328,13 +329,11 @@ export const createShareLink = async (config: AppConfig, itemId: string): Promis
     }
 };
 
-// --- CORE RECURSIVE CRAWLER ---
+// --- CORE RECURSIVE CRAWLER (Used for Admin View All) ---
 const crawlFolder = async (token: string, folderUrl: string, selectFields: string, maxDepth: number = 5, currentDepth: number = 0): Promise<any[]> => {
     if (currentDepth > maxDepth) return [];
-
     let items: any[] = [];
     let nextLink = folderUrl;
-
     try {
         while (nextLink) {
             const res = await fetch(nextLink, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -343,9 +342,7 @@ const crawlFolder = async (token: string, folderUrl: string, selectFields: strin
             items.push(...(data.value || []));
             nextLink = data['@odata.nextLink'];
         }
-    } catch (e) {
-        return [];
-    }
+    } catch (e) { return []; }
 
     let allFiles: any[] = items.filter((i: any) => i.file);
     const subFolders = items.filter((i: any) => i.folder);
@@ -359,7 +356,6 @@ const crawlFolder = async (token: string, folderUrl: string, selectFields: strin
     subResults.forEach(res => {
         allFiles = allFiles.concat(res);
     });
-
     return allFiles;
 };
 
@@ -371,23 +367,34 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
     try {
         const token = await getAccessToken();
         
-        // --- TARGETED CRAWL (QUÉT CỤ THỂ) ---
-        // Chỉ quét vào thư mục của Tháng Hiện Tại của User
-        // Cấu trúc: username/T{month}/Tuần_{week}
+        // --- SỬ DỤNG LẠI SEARCH API (CÁCH CŨ) ---
+        // Nhưng Search ngay tại thư mục gốc của App để bao quát hết
+        const selectFields = "select=id,name,file,webUrl,lastModifiedDateTime,size,parentReference,thumbnails,@microsoft.graph.downloadUrl";
+        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?${selectFields}&top=100`;
         
-        const now = new Date();
-        const monthStr = (now.getMonth() + 1).toString().padStart(2, '0');
+        const res = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
         
-        // Path tới folder tháng hiện tại của User
-        const currentMonthPath = `${config.targetFolder}/${user.username}/T${monthStr}`;
-        const selectFields = "$expand=thumbnails($select=medium,large)&$select=id,name,file,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl";
-        
-        const monthUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${currentMonthPath}:/children?${selectFields}`;
-        
-        // Crawl nhẹ (độ sâu 2: Tháng -> Tuần -> File)
-        const recentFiles = await crawlFolder(token, monthUrl, selectFields, 2);
+        if (!res.ok) return [];
 
-        return recentFiles
+        const data = await res.json();
+        let items = data.value || [];
+
+        // --- LỌC KẾT QUẢ CHO USER THƯỜNG ---
+        if (user.role !== 'admin') {
+            const unitRoot = user.unit.split('/')[0].toLowerCase(); // Ví dụ: "tiểu đoàn 18"
+            items = items.filter((i: any) => {
+                const path = i.parentReference?.path || "";
+                const decodedPath = decodeURIComponent(path).toLowerCase();
+                
+                // User thấy file nếu file đó nằm trong folder chứa tên Unit của họ 
+                // HOẶC file nằm trong folder 'Tu_lieu_chung_Cho_duyet/username' (file họ up vào chung)
+                return decodedPath.includes(unitRoot) || 
+                       decodedPath.includes(user.username.toLowerCase());
+            });
+        }
+
+        return items
+            .filter((i: any) => i.file) // Chỉ lấy file
             .sort((a: any, b: any) => new Date(b.lastModifiedDateTime).getTime() - new Date(a.lastModifiedDateTime).getTime())
             .slice(0, 50)
             .map((i: any) => ({
@@ -399,7 +406,9 @@ export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promi
                 status: UploadStatus.SUCCESS,
                 timestamp: new Date(i.lastModifiedDateTime),
                 size: i.size,
-                mimeType: i.file?.mimeType
+                mimeType: i.file?.mimeType,
+                // Check if file is in "Cho_duyet" folder based on path
+                errorMessage: (i.parentReference?.path || "").includes("Cho_duyet") ? "Chờ duyệt" : undefined
             }));
 
     } catch (e) {
@@ -414,12 +423,9 @@ export const fetchUserDeletedItems = async (config: AppConfig, user: User): Prom
         const token = await getAccessToken();
         const url = `https://graph.microsoft.com/v1.0/me/drive/root/recycleBin`;
         const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-        
         if (!res.ok) return [];
-        
         const data = await res.json();
         const items = data.value || [];
-
         return items.map((i: any) => ({
             id: i.id,
             fileName: i.name,
@@ -430,94 +436,72 @@ export const fetchUserDeletedItems = async (config: AppConfig, user: User): Prom
             deletedDate: i.deleted?.time ? new Date(i.deleted.time) : new Date(),
             size: i.size
         }));
-
-    } catch (e) {
-        return [];
-    }
+    } catch (e) { return []; }
 };
 
 export const fetchAllMedia = async (config: AppConfig, user: User): Promise<CloudItem[]> => {
      if (config.simulateMode) return [];
-     
      const selectFields = "$expand=thumbnails($select=medium,large)&$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,parentReference,@microsoft.graph.downloadUrl";
-     
      try {
          const token = await getAccessToken();
-         let allRawItems: any[] = [];
-
+         // ADMIN dùng Crawl để xem tất cả chính xác nhất
          if (user.role === 'admin') {
-             // ADMIN: Quét toàn bộ Root
              const rootUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/children?${selectFields}`;
-             allRawItems = await crawlFolder(token, rootUrl, selectFields);
-         } else {
-             // USER THƯỜNG: Quét các nhánh được phép
-             const promises = [];
-
-             // 1. Nhánh cá nhân
-             const personalUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${user.username}:/children?${selectFields}`;
-             promises.push(crawlFolder(token, personalUrl, selectFields));
-
-             // 2. Nhánh chung
-             const commonUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Tu_lieu_chung:/children?${selectFields}`;
-             promises.push(crawlFolder(token, commonUrl, selectFields));
-             
-             // 3. Nhánh được cấp quyền
-             if (user.allowedPaths && Array.isArray(user.allowedPaths)) {
-                 for (const allowedPath of user.allowedPaths) {
-                     const allowedUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/${allowedPath}:/children?${selectFields}`;
-                     promises.push(crawlFolder(token, allowedUrl, selectFields));
+             const allRawItems = await crawlFolder(token, rootUrl, selectFields);
+             const uniqueMap = new Map();
+             allRawItems.forEach(i => {
+                 if (!['users.json', 'config.json', 'qrcodes.json'].includes(i.name.toLowerCase())) {
+                     uniqueMap.set(i.id, i);
                  }
-             }
-             
-             const results = await Promise.all(promises);
-             results.forEach(res => allRawItems.push(...res));
-         }
-
-         // Lọc và Map
-         const systemFiles = ['users.json', 'config.json', 'qrcodes.json'];
-         const uniqueMap = new Map();
-         allRawItems.forEach(i => {
-             if (!systemFiles.includes(i.name.toLowerCase())) {
-                 uniqueMap.set(i.id, i);
-             }
+             });
+             return Array.from(uniqueMap.values()).map(mapGraphItemToCloudItem);
+         } 
+         
+         // USER THƯỜNG: Dùng Search cho nhanh và cover được nhiều folder con
+         const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?${selectFields}&top=999`;
+         const res = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+         if(!res.ok) return [];
+         const data = await res.json();
+         let items = data.value || [];
+         
+         // Filter User View
+         const unitRoot = user.unit.split('/')[0].toLowerCase();
+         items = items.filter((i: any) => {
+             const path = decodeURIComponent(i.parentReference?.path || "").toLowerCase();
+             return path.includes(unitRoot) || path.includes('tu_lieu_chung') || path.includes(user.username.toLowerCase());
          });
-
-         return Array.from(uniqueMap.values()).map(mapGraphItemToCloudItem);
-
-     } catch (e) { 
-         console.error("Fetch All Media Failed", e);
-         return []; 
-     }
+         
+         return items.filter((i:any) => i.file).map(mapGraphItemToCloudItem);
+     } catch (e) { return []; }
 };
 
 export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> => {
     if (config.simulateMode) return { totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 };
     try {
         const token = await getAccessToken();
-        
-        // 1. TỔNG DUNG LƯỢNG
         const folderInfoUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}?select=size`;
+        // Search all files for count
+        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q=' ')?select=id,file&top=999`;
         
-        // 2. TỔNG SỐ FILE
-        const minimalSelect = "$select=id,file,folder";
-        const rootCrawlUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/children?${minimalSelect}`;
-
-        const [folderRes, allFiles] = await Promise.all([
+        const [folderRes, searchRes] = await Promise.all([
             fetch(folderInfoUrl, { headers: { 'Authorization': `Bearer ${token}` } }),
-            crawlFolder(token, rootCrawlUrl, minimalSelect)
+            fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } })
         ]);
         
         let totalStorage = 0;
-        let totalFiles = allFiles.length;
+        let totalFiles = 0;
 
         if (folderRes.ok) {
             const folderData = await folderRes.json();
             totalStorage = folderData.size || 0;
         }
+        if (searchRes.ok) {
+            const searchData = await searchRes.json();
+            totalFiles = searchData.value ? searchData.value.filter((i:any) => i.file).length : 0;
+        }
 
         return { totalUsers: 0, activeUsers: 0, totalFiles, totalStorage };
     } catch (e) {
-        console.error("Fetch Stats Failed", e);
         return { totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 };
     }
 };
@@ -550,10 +534,8 @@ export const saveQRCodeLog = async (log: QRCodeLog, config: AppConfig): Promise<
   try {
     const logs = await fetchQRCodeLogs(config);
     logs.push(log);
-    
     const token = await getAccessToken();
     const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/System/qrcodes.json:/content`;
-    
     const res = await fetch(url, {
       method: 'PUT',
       headers: getHeaders(token),
@@ -568,10 +550,8 @@ export const deleteQRCodeLog = async (config: AppConfig, logId: string): Promise
   try {
     const currentLogs = await fetchQRCodeLogs(config);
     const newLogs = currentLogs.filter(l => l.id !== logId);
-    
     const token = await getAccessToken();
     const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/System/qrcodes.json:/content`;
-    
     const response = await fetch(url, {
       method: 'PUT',
       headers: getHeaders(token),
@@ -597,13 +577,10 @@ export const saveVisitor = async (config: AppConfig, unitCode: string, record: V
     try {
         const date = new Date(record.visitDate);
         const monthStr = `${date.getFullYear()}_${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-        
         const currentVisitors = await fetchVisitors(config, unitCode, monthStr);
         currentVisitors.push(record);
-
         const token = await getAccessToken();
         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Visits/${unitCode}_${monthStr}.json:/content`;
-
         const res = await fetch(url, {
             method: 'PUT',
             headers: getHeaders(token),
@@ -616,16 +593,12 @@ export const saveVisitor = async (config: AppConfig, unitCode: string, record: V
 export const updateVisitorStatus = async (config: AppConfig, unitCode: string, recordId: string, status: 'pending' | 'approved' | 'completed'): Promise<boolean> => {
      if (config.simulateMode) return true;
      try {
-        const date = new Date(); // Giả định duyệt trong tháng hiện tại hoặc cần logic lấy ngày từ record
+        const date = new Date(); 
         const monthStr = `${date.getFullYear()}_${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-        // Để đơn giản, giả sử unitCode và monthStr được truyền đúng từ UI
-        
         const currentVisitors = await fetchVisitors(config, unitCode, monthStr);
         const updatedVisitors = currentVisitors.map(v => v.id === recordId ? { ...v, status } : v);
-
         const token = await getAccessToken();
         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Visits/${unitCode}_${monthStr}.json:/content`;
-
         const res = await fetch(url, {
             method: 'PUT',
             headers: getHeaders(token),
