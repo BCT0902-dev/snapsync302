@@ -164,39 +164,60 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
     );
 
     return (
-        <div className="min-h-screen bg-black flex flex-col">
-            {/* Header Overlay */}
-            <div className="bg-gradient-to-b from-black/80 to-transparent p-4 flex justify-between items-start absolute top-0 w-full z-20 pointer-events-none">
-                <div className="text-white pointer-events-auto">
-                    <h1 className="font-bold text-lg truncate pr-4 drop-shadow-md">{fileData?.name}</h1>
-                    <p className="text-xs text-white/80 opacity-80">
-                        {systemConfig.appName} • {fileData ? (fileData.size / 1024 / 1024).toFixed(2) : 0} MB
-                    </p>
-                </div>
-                <div className="flex gap-2 pointer-events-auto">
-                    <a href="/" className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all shadow-lg">
-                        <Home className="w-6 h-6" />
-                    </a>
-                    <a 
-                        href={fileData?.url} 
-                        download={fileData?.name}
-                        className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all shadow-lg"
-                    >
-                        <Download className="w-6 h-6" />
-                    </a>
+        <div className="h-[100dvh] bg-black flex flex-col relative overflow-hidden">
+            {/* Header Overlay - Absolute on top */}
+            <div className="absolute top-0 left-0 w-full z-20 pointer-events-none">
+                <div className="bg-gradient-to-b from-black/90 via-black/50 to-transparent p-4 flex justify-between items-start">
+                    <div className="text-white pointer-events-auto max-w-[70%]">
+                        <h1 className="font-bold text-lg truncate drop-shadow-md">{fileData?.name}</h1>
+                        <p className="text-xs text-white/80 opacity-80">
+                            {systemConfig.appName} • {fileData ? (fileData.size / 1024 / 1024).toFixed(2) : 0} MB
+                        </p>
+                    </div>
+                    <div className="flex gap-2 pointer-events-auto shrink-0">
+                        <a href="/" className="p-2.5 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all shadow-lg">
+                            <Home className="w-5 h-5" />
+                        </a>
+                        <a 
+                            href={fileData?.url} 
+                            download={fileData?.name}
+                            className="p-2.5 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all shadow-lg"
+                        >
+                            <Download className="w-5 h-5" />
+                        </a>
+                    </div>
                 </div>
             </div>
 
-            {/* Viewer Content */}
-            <div className="flex-1 flex items-center justify-center p-0 overflow-hidden relative w-full h-full">
+            {/* Viewer Content - Absolute Fullscreen */}
+            <div className="absolute inset-0 z-0 bg-slate-900 flex items-center justify-center">
                 {fileType === 'pdf' ? (
-                     <iframe 
-                        src={fileData?.url} 
-                        className="w-full h-full border-0 bg-white"
-                        title={fileData?.name}
-                    />
+                     <object
+                        data={`${fileData?.url}#view=FitH`}
+                        type="application/pdf"
+                        className="w-full h-full block"
+                    >
+                        {/* Fallback */}
+                        <div className="flex flex-col items-center justify-center h-full text-white p-6 text-center">
+                            <FileIcon className="w-16 h-16 text-slate-500 mb-4" />
+                            <p className="mb-2 font-bold">Không thể xem trực tiếp</p>
+                            <p className="text-sm text-slate-400 mb-6">Trình duyệt này không hỗ trợ xem PDF nhúng.</p>
+                            <a 
+                                href={fileData?.url} 
+                                download={fileData?.name} 
+                                className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold shadow-lg hover:bg-emerald-700 w-full max-w-xs"
+                            >
+                                <Download className="w-5 h-5 inline-block mr-2" />
+                                Tải về máy
+                            </a>
+                        </div>
+                    </object>
                 ) : fileType === 'image' ? (
-                    <img src={fileData?.url} alt="Content" className="max-w-full max-h-full object-contain" />
+                    <img 
+                        src={fileData?.url} 
+                        alt="Content" 
+                        className="w-full h-full object-contain" 
+                    />
                 ) : fileType === 'video' ? (
                     <video 
                         src={fileData?.url} 
@@ -204,14 +225,13 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                         autoPlay 
                         playsInline 
                         muted={false}
-                        className="max-w-full max-h-full" 
+                        className="w-full h-full max-h-screen object-contain" 
                     />
                 ) : (
                     <div className="bg-white p-8 rounded-2xl flex flex-col items-center text-center m-4 max-w-sm">
                         <FileIcon className="w-16 h-16 text-slate-400 mb-4" />
                         <p className="font-bold text-slate-700 mb-2">Định dạng không hỗ trợ xem trước</p>
                         <p className="text-xs text-slate-500 mb-6 break-all">{fileData?.name}</p>
-                        <p className="text-xs text-slate-400 mb-6">Type: {fileData?.mimeType}</p>
                         <a 
                             href={fileData?.url} 
                             download={fileData?.name}
@@ -223,8 +243,8 @@ const SharedFileViewer = ({ fileId, systemConfig }: { fileId: string, systemConf
                 )}
             </div>
             
-             <div className="absolute bottom-6 left-0 w-full text-center z-20 pointer-events-none">
-                 <p className="text-white/30 text-[10px] uppercase tracking-widest">Powered by {systemConfig.appName}</p>
+             <div className="absolute bottom-4 left-0 w-full text-center z-20 pointer-events-none">
+                 <p className="text-white/20 text-[9px] uppercase tracking-widest font-medium drop-shadow-sm">Powered by {systemConfig.appName}</p>
              </div>
         </div>
     );
