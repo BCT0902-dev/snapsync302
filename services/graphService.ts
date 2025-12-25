@@ -1,8 +1,9 @@
+
 import { AppConfig, User, SystemConfig, CloudItem, PhotoRecord, UploadStatus, SystemStats, QRCodeLog, VisitorRecord } from '../types';
 import { INITIAL_USERS } from './mockAuth';
 
 export const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
-  appName: 'CNTT/f302',
+  appName: 'Mediaf302',
   logoUrl: '',
   themeColor: '#059669'
 };
@@ -14,10 +15,11 @@ export const getAccessToken = async (): Promise<string> => {
       const data = await response.json();
       return data.accessToken;
     }
-    throw new Error("No token");
-  } catch (e) {
-    // console.warn("Failed to get access token, switching to simulation if not handled");
-    throw new Error("API_NOT_FOUND");
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.error || "Không có Access Token");
+  } catch (e: any) {
+    if (e.message === "Failed to fetch") throw new Error("API_NOT_FOUND");
+    throw e;
   }
 };
 
@@ -26,29 +28,23 @@ const getHeaders = (token: string) => ({
   'Content-Type': 'application/json'
 });
 
-// --- USER MANAGEMENT ---
+// --- QUẢN LÝ NGƯỜI DÙNG ---
 
 export const fetchUsersFromOneDrive = async (config: AppConfig): Promise<User[]> => {
   if (config.simulateMode) return INITIAL_USERS;
-  
   try {
     const token = await getAccessToken();
     const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/System/users.json:/content`;
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-    if (res.ok) {
-      return await res.json();
-    }
-    // If not found, return initial users (first run)
+    if (res.ok) return await res.json();
     return INITIAL_USERS;
   } catch (e) {
-    console.error("Fetch users failed", e);
     return INITIAL_USERS;
   }
 };
 
 export const saveUsersToOneDrive = async (users: User[], config: AppConfig): Promise<boolean> => {
   if (config.simulateMode) return true;
-
   try {
     const token = await getAccessToken();
     const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/System/users.json:/content`;
@@ -58,13 +54,10 @@ export const saveUsersToOneDrive = async (users: User[], config: AppConfig): Pro
       body: JSON.stringify(users, null, 2)
     });
     return res.ok;
-  } catch (e) {
-    console.error("Save users failed", e);
-    return false;
-  }
+  } catch (e) { return false; }
 };
 
-// --- SYSTEM CONFIG ---
+// --- CẤU HÌNH HỆ THỐNG ---
 
 export const fetchSystemConfig = async (config: AppConfig): Promise<SystemConfig> => {
   if (config.simulateMode) return DEFAULT_SYSTEM_CONFIG;
@@ -74,9 +67,7 @@ export const fetchSystemConfig = async (config: AppConfig): Promise<SystemConfig
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
     if (res.ok) return await res.json();
     return DEFAULT_SYSTEM_CONFIG;
-  } catch (e) {
-    return DEFAULT_SYSTEM_CONFIG;
-  }
+  } catch (e) { return DEFAULT_SYSTEM_CONFIG; }
 };
 
 export const saveSystemConfig = async (sysConfig: SystemConfig, config: AppConfig): Promise<boolean> => {
@@ -90,31 +81,27 @@ export const saveSystemConfig = async (sysConfig: SystemConfig, config: AppConfi
       body: JSON.stringify(sysConfig, null, 2)
     });
     return res.ok;
-  } catch (e) {
-    return false;
-  }
+  } catch (e) { return false; }
 };
 
-// --- FILE OPERATIONS ---
+// --- THAO TÁC FILE ---
 
 export const listPathContents = async (config: AppConfig, path: string, user?: User): Promise<CloudItem[]> => {
   if (config.simulateMode) return [];
   try {
     const token = await getAccessToken();
     const cleanPath = path.replace(/^\/+/, '').replace(/\/+$/, '');
-    const target = cleanPath ? 
-      `:/${config.targetFolder}/${cleanPath}:/children` : 
-      `:/${config.targetFolder}:/children`;
+    const folderPath = cleanPath ? `${config.targetFolder}/${cleanPath}` : config.targetFolder;
     
-    const url = `https://graph.microsoft.com/v1.0/me/drive/root${target}?$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,video,image,@microsoft.graph.downloadUrl`;
+    // Sử dụng encodeURIComponent để xử lý tên thư mục có dấu tiếng Việt/khoảng trắng
+    const encodedPath = folderPath.split('/').map(p => encodeURIComponent(p)).join('/');
+    const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/children?$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,video,image,@microsoft.graph.downloadUrl`;
     
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
     if (!res.ok) return [];
     
     const data = await res.json();
-    const items = data.value as any[];
-    
-    return items.map(i => ({
+    return (data.value || []).map((i: any) => ({
       id: i.id,
       name: i.name,
       folder: i.folder,
@@ -123,34 +110,9 @@ export const listPathContents = async (config: AppConfig, path: string, user?: U
       lastModifiedDateTime: i.lastModifiedDateTime,
       size: i.size,
       downloadUrl: i['@microsoft.graph.downloadUrl'],
-      thumbnailUrl: i.file?.mimeType?.startsWith('image/') ? i['@microsoft.graph.downloadUrl'] : undefined // Simplified
+      thumbnailUrl: i['@microsoft.graph.downloadUrl']
     }));
-  } catch (e) {
-    console.error(e);
-    return [];
-  }
-};
-
-export const fetchFolderChildren = async (config: AppConfig, folderId: string): Promise<CloudItem[]> => {
-    // Re-use list path logic but with Item ID
-    if (config.simulateMode) return [];
-    try {
-        const token = await getAccessToken();
-        const url = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children?$select=id,name,folder,file,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl`;
-        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-        if (!res.ok) return [];
-        const data = await res.json();
-        return data.value.map((i: any) => ({
-            id: i.id,
-            name: i.name,
-            folder: i.folder,
-            file: i.file,
-            webUrl: i.webUrl,
-            lastModifiedDateTime: i.lastModifiedDateTime,
-            size: i.size,
-            downloadUrl: i['@microsoft.graph.downloadUrl']
-        }));
-    } catch(e) { return []; }
+  } catch (e) { return []; }
 };
 
 export const uploadToOneDrive = async (file: File, config: AppConfig, user: User, onProgress: (p: number) => void, destination: string): Promise<{success: boolean, url?: string, error?: string, isPending?: boolean}> => {
@@ -161,13 +123,20 @@ export const uploadToOneDrive = async (file: File, config: AppConfig, user: User
   
   try {
     const token = await getAccessToken();
-    const folderPath = destination === 'personal' ? 
-        `${config.targetFolder}/${user.username}/Uploads` :
-        `${config.targetFolder}/Tu_lieu_chung_Cho_duyet/${user.username}`;
-        
-    const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${folderPath}/${file.name}:/content`;
+    const now = new Date();
+    const monthStr = `T${(now.getMonth() + 1).toString().padStart(2, '0')}`;
+    const weekStr = `Tuần_${Math.min(4, Math.ceil(now.getDate() / 7))}`;
     
-    // For small files < 4MB, use simple PUT. For larger, should use createUploadSession (simplified here)
+    // Fix logic đường dẫn cho folder chung
+    const folderPath = destination === 'personal' ? 
+        `${config.targetFolder}/${user.username}/${monthStr}/${weekStr}` :
+        `${config.targetFolder}/Tu_lieu_chung_Cho_duyet/${user.username}`;
+    
+    // SỬA LỖI QUAN TRỌNG: Thêm username vào tên file để logic xóa file hoạt động đúng
+    const safeName = `${user.username}_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+    const encodedPath = folderPath.split('/').map(p => encodeURIComponent(p)).join('/');
+    const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}/${safeName}:/content`;
+    
     const res = await fetch(url, {
         method: 'PUT',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': file.type },
@@ -178,12 +147,10 @@ export const uploadToOneDrive = async (file: File, config: AppConfig, user: User
         onProgress(100);
         const data = await res.json();
         return { success: true, url: data.webUrl, isPending: destination === 'common' };
-    } else {
-        return { success: false, error: res.statusText };
     }
-  } catch (e: any) {
-    return { success: false, error: e.message };
-  }
+    const err = await res.json().catch(() => ({}));
+    return { success: false, error: err.error?.message || "Lỗi tải lên" };
+  } catch (e: any) { return { success: false, error: e.message }; }
 };
 
 export const deleteFileFromOneDrive = async (config: AppConfig, itemId: string): Promise<boolean> => {
@@ -194,31 +161,6 @@ export const deleteFileFromOneDrive = async (config: AppConfig, itemId: string):
         const res = await fetch(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
         return res.ok;
     } catch (e) { return false; }
-};
-
-export const renameOneDriveItem = async (config: AppConfig, itemId: string, newName: string): Promise<{success: boolean, error?: string}> => {
-    if (config.simulateMode) return { success: true };
-    try {
-        const token = await getAccessToken();
-        const url = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}`;
-        const res = await fetch(url, {
-            method: 'PATCH',
-            headers: getHeaders(token),
-            body: JSON.stringify({ name: newName })
-        });
-        if (res.ok) return { success: true };
-        const data = await res.json();
-        return { success: false, error: data.error?.message };
-    } catch (e: any) { return { success: false, error: e.message }; }
-};
-
-export const moveOneDriveItem = async (config: AppConfig, itemId: string, destPath: string): Promise<boolean> => {
-     if (config.simulateMode) return true;
-     // Simplified: In Graph API, move is PATCH with parentReference. 
-     // We need to find the parent folder ID first, which is complex.
-     // For this fix, we will assume success for now or implement full logic later.
-     // To strictly implemented, we need the Destination Folder ID.
-     return true; 
 };
 
 export const createShareLink = async (config: AppConfig, itemId: string): Promise<string> => {
@@ -232,106 +174,106 @@ export const createShareLink = async (config: AppConfig, itemId: string): Promis
             body: JSON.stringify({ type: 'view', scope: 'anonymous' })
         });
         const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || "Không thể tạo link");
         return data.link.webUrl;
-    } catch (e) { throw new Error("Could not create link"); }
+    } catch (e: any) { throw new Error(e.message); }
 };
 
-// --- HISTORY & STATS ---
+// --- LỊCH SỬ & THỐNG KÊ ---
 
 export const fetchUserRecentFiles = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
     if (config.simulateMode) return [];
-    // Mock implementation for demo - usually requires search API
-    return [];
-};
-
-export const fetchUserDeletedItems = async (config: AppConfig, user: User): Promise<PhotoRecord[]> => {
-    if (config.simulateMode) return [];
-    return [];
+    try {
+        const token = await getAccessToken();
+        // Cải thiện query search để tìm chính xác trong folder của user
+        const searchPath = `${config.targetFolder}/${user.username}`;
+        const encodedPath = searchPath.split('/').map(p => encodeURIComponent(p)).join('/');
+        
+        // Nếu folder chưa tồn tại (user mới), search có thể lỗi 404, trả về rỗng thay vì lỗi
+        const searchUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/search(q='')?$select=id,name,file,lastModifiedDateTime,size,@microsoft.graph.downloadUrl&top=50`;
+        const res = await fetch(searchUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (!res.ok) return [];
+        const data = await res.json();
+        
+        return (data.value || [])
+            .filter((i: any) => i.file) // Chỉ lấy file
+            .sort((a: any, b: any) => new Date(b.lastModifiedDateTime).getTime() - new Date(a.lastModifiedDateTime).getTime())
+            .map((i: any) => ({
+                id: i.id,
+                fileName: i.name,
+                status: UploadStatus.SUCCESS,
+                timestamp: new Date(i.lastModifiedDateTime),
+                previewUrl: i['@microsoft.graph.downloadUrl'],
+                size: i.size,
+                mimeType: i.file.mimeType
+            }));
+    } catch (e) { return []; }
 };
 
 export const fetchAllMedia = async (config: AppConfig, user: User): Promise<CloudItem[]> => {
-     // Search for all images/videos
      if (config.simulateMode) return [];
      try {
          const token = await getAccessToken();
-         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}:/search(q='')?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl`;
+         // Search toàn bộ folder gốc
+         const rootPath = config.targetFolder;
+         const encodedPath = encodeURIComponent(rootPath);
+         
+         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/search(q='')?select=id,name,file,folder,webUrl,lastModifiedDateTime,size,@microsoft.graph.downloadUrl&top=100`;
          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
          if (!res.ok) return [];
          const data = await res.json();
-         return data.value.filter((i:any) => i.file).map((i:any) => ({
+         return (data.value || []).filter((i:any) => i.file).map((i:any) => ({
              id: i.id,
              name: i.name,
              file: i.file,
              webUrl: i.webUrl,
              lastModifiedDateTime: i.lastModifiedDateTime,
              size: i.size,
-             downloadUrl: i['@microsoft.graph.downloadUrl']
+             downloadUrl: i['@microsoft.graph.downloadUrl'],
+             thumbnailUrl: i['@microsoft.graph.downloadUrl']
          }));
      } catch (e) { return []; }
 };
 
 export const fetchSystemStats = async (config: AppConfig): Promise<SystemStats> => {
     if (config.simulateMode) return { totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 };
-    // Simplified stats
-    return { totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 };
-};
-
-export const aggregateUserStats = (media: CloudItem[], users: User[]): User[] => {
-    return users.map(u => {
-        // Logic to count files per user based on file naming or folder path if available in simulation
-        return {
-            ...u,
-            usageStats: { fileCount: 0, totalSize: 0 }
+    try {
+        const token = await getAccessToken();
+        const encodedPath = encodeURIComponent(config.targetFolder);
+        const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}?$select=id,size,folder`;
+        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (!res.ok) return { totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 };
+        const data = await res.json();
+        return { 
+            totalUsers: 0, 
+            activeUsers: 0, 
+            totalFiles: data.folder?.childCount || 0, 
+            totalStorage: data.size || 0 
         };
-    });
+    } catch (e) { return { totalUsers: 0, activeUsers: 0, totalFiles: 0, totalStorage: 0 }; }
 };
 
 // --- QR LOGS ---
 
-export const fetchQRCodeLogs = async (config: AppConfig): Promise<QRCodeLog[]> => {
-  if (config.simulateMode) return [];
-  try {
-    const token = await getAccessToken();
-    const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/System/qrcodes.json:/content`;
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-    if (res.ok) return await res.json();
-    return [];
-  } catch (e) { return []; }
-};
-
 export const saveQRCodeLog = async (log: QRCodeLog, config: AppConfig): Promise<boolean> => {
   if (config.simulateMode) return true;
   try {
-    const logs = await fetchQRCodeLogs(config);
+    const token = await getAccessToken();
+    // Lấy log hiện tại trước
+    let logs: QRCodeLog[] = [];
+    const urlGet = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/System/qrcodes.json:/content`;
+    const resGet = await fetch(urlGet, { headers: { 'Authorization': `Bearer ${token}` } });
+    if(resGet.ok) logs = await resGet.json();
+    
     logs.push(log);
     
-    const token = await getAccessToken();
-    const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/System/qrcodes.json:/content`;
-    
-    const res = await fetch(url, {
+    const urlPut = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/System/qrcodes.json:/content`;
+    const resPut = await fetch(urlPut, {
       method: 'PUT',
       headers: getHeaders(token),
       body: JSON.stringify(logs, null, 2)
     });
-    return res.ok;
-  } catch (error) { return false; }
-};
-
-export const deleteQRCodeLog = async (config: AppConfig, logId: string): Promise<boolean> => {
-  if (config.simulateMode) return true;
-  try {
-    const currentLogs = await fetchQRCodeLogs(config);
-    const newLogs = currentLogs.filter(l => l.id !== logId);
-    
-    const token = await getAccessToken();
-    const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/System/qrcodes.json:/content`;
-    
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: getHeaders(token),
-      body: JSON.stringify(newLogs, null, 2)
-    });
-    return response.ok;
+    return resPut.ok;
   } catch (error) { return false; }
 };
 
@@ -351,30 +293,37 @@ export const fetchVisitors = async (config: AppConfig, unit: string, monthStr: s
 export const saveVisitor = async (config: AppConfig, unitCode: string, record: VisitorRecord): Promise<boolean> => {
     if (config.simulateMode) return true;
     try {
-        // Calculate Month String from record date
         const date = new Date(record.visitDate);
         const monthStr = `${date.getFullYear()}_${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-        
         const currentVisitors = await fetchVisitors(config, unitCode, monthStr);
         currentVisitors.push(record);
-
         const token = await getAccessToken();
         const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${config.targetFolder}/Visits/${unitCode}_${monthStr}.json:/content`;
-
-        const res = await fetch(url, {
-            method: 'PUT',
-            headers: getHeaders(token),
-            body: JSON.stringify(currentVisitors, null, 2)
-        });
+        const res = await fetch(url, { method: 'PUT', headers: getHeaders(token), body: JSON.stringify(currentVisitors, null, 2) });
         return res.ok;
     } catch(e) { return false; }
 };
 
 export const updateVisitorStatus = async (config: AppConfig, unitCode: string, recordId: string, status: 'pending' | 'approved' | 'completed'): Promise<boolean> => {
      if (config.simulateMode) return true;
-     // Finding the record requires knowing the month, which might be tricky if not passed.
-     // For now, we assume current month or try to deduce. 
-     // Ideally, the UI passes the month. 
-     // This is a simplified implementation.
-     return true;
+     try {
+         const token = await getAccessToken();
+         const items = await listPathContents(config, 'Visits');
+         const unitFiles = items.filter(i => i.name.startsWith(unitCode + '_'));
+         
+         for (const file of unitFiles) {
+             const fileUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${file.id}/content`;
+             const res = await fetch(fileUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+             if (res.ok) {
+                 const records: VisitorRecord[] = await res.json();
+                 const idx = records.findIndex(r => r.id === recordId);
+                 if (idx > -1) {
+                     records[idx].status = status;
+                     const update = await fetch(fileUrl, { method: 'PUT', headers: getHeaders(token), body: JSON.stringify(records, null, 2) });
+                     return update.ok;
+                 }
+             }
+         }
+         return false;
+     } catch (e) { return false; }
 };
